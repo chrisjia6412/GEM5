@@ -290,7 +290,7 @@ class BaseCache : public MemObject
     /** Is the cache a last level cache. If so, we need to deal with different 
      *  block size
      */
-    const bool isBottomLevel;
+    bool isBottomLevel;
 
     /** The expire time of edram*/
     const int expiredPeriod;
@@ -470,7 +470,8 @@ class BaseCache : public MemObject
 
     Stats::Scalar sttRamAccesses;
     Stats::Scalar sttRamHit;
-    Stats::Scalar edRamHit;    
+    Stats::Scalar edRamHit;   
+    Stats::Scalar timingInstructions; 
     //Stats::Formula edRamHitRate;
     //Stats::Formula sttRamHitRate;
 

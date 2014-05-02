@@ -54,6 +54,7 @@
 #include "base/hashmap.hh"
 #include "mem/bus.hh"
 #include "params/CoherentBus.hh"
+#include "debug/CheckAddr.hh"
 
 /**
  * A coherent bus connects a number of (potentially) snooping masters
@@ -140,6 +141,7 @@ class CoherentBus : public BaseBus
         virtual AddrRangeList getAddrRanges() const
         { return bus.getAddrRanges(); }
 
+
     };
 
     /**
@@ -205,6 +207,12 @@ class CoherentBus : public BaseBus
         virtual void recvRetry()
         { bus.recvRetry(id); }
 
+        bool recvCheckAddr(Addr a)
+        { 
+            DPRINTF(CheckAddr,"Port RecvAddr for %x\n",a);
+            return bus.recvCheckAddr(a);
+        }
+
     };
 
     /**
@@ -249,6 +257,11 @@ class CoherentBus : public BaseBus
         {
             panic("SnoopRespPort should never see timing response\n");
             return false;
+        }
+
+        bool recvCheckAddr(Addr a) { 
+            panic("Recv Check Addr should not happen\n"); 
+            return true; 
         }
 
     };
@@ -338,6 +351,10 @@ class CoherentBus : public BaseBus
      * @param exclude_slave_port_id Id of slave port to exclude
      */
     void forwardFunctional(PacketPtr pkt, PortID exclude_slave_port_id);
+
+    /** Qi: check addr
+     */
+    bool recvCheckAddr(Addr a);
 
     Stats::Scalar dataThroughBus;
     Stats::Scalar snoopDataThroughBus;

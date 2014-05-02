@@ -55,6 +55,7 @@
 #include "base/misc.hh"
 #include "base/types.hh"
 #include "debug/Cache.hh"
+#include "debug/SttCache.hh"
 #include "mem/cache/cache.hh"
 #include "mem/cache/mshr.hh"
 #include "sim/core.hh"
@@ -378,6 +379,9 @@ MSHR::handleSnoop(PacketPtr pkt, Counter _order)
         // This transaction will get a read-shared copy, downgrading
         // our copy if we had an exclusive one
         postDowngrade = true;
+        if(pkt->getAddr() == 0x8f9c0) {
+            DPRINTF(SttCache,"mshr assert shared\n");
+        }
         pkt->assertShared();
     }
 

@@ -70,6 +70,8 @@ class BaseTags : public ClockedObject
     const unsigned size;
     /** The hit latency of the cache. */
     const Cycles hitLatency;
+    /** The expired period of edram cache*/
+    const int expiredPeriod;
 
     /** Pointer to the parent cache. */
     BaseCache *cache;

@@ -1,7 +1,14 @@
-# -*- mode:python -*-
-
-# Copyright (c) 2006 The Regents of The University of Michigan
+# Copyright (c) 2013 ARM Limited
 # All rights reserved.
+#
+# The license below extends only to copyright in the software and shall
+# not be construed as granting a license to any other intellectual
+# property including but not limited to intellectual property relating
+# to a hardware implementation of the functionality of the software
+# licensed hereunder.  You may use the software subject to the license
+# terms below provided that you ensure that this notice is replicated
+# unmodified and in its entirety in all distributions of the software,
+# modified or unmodified, in source code or in binary form.
 #
 # Redistribution and use in source and binary forms, with or without
 # modification, are permitted provided that the following conditions are
@@ -26,26 +33,24 @@
 # (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 # OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #
-# Authors: Nathan Binkert
+# Authors: Andreas Hansson
 
-Import('*')
+from m5.params import *
+from AbstractMemory import *
 
-SimObject('BaseCache.py')
+# A wrapper for DRAMSim2 multi-channel memory controller
+class DRAMSim2(AbstractMemory):
+    type = 'DRAMSim2'
+    cxx_header = "mem/dramsim2.hh"
 
-Source('base.cc')
-Source('cache.cc')
-Source('blk.cc')
-Source('mshr.cc')
-Source('mshr_queue.cc')
+    # A single port for now
+    port = SlavePort("Slave port")
 
-DebugFlag('Cache')
-DebugFlag('SttCache')
-DebugFlag('CachePort')
-DebugFlag('CacheRepl')
-DebugFlag('CacheTags')
-DebugFlag('HWPrefetch')
-DebugFlag('DeadStat')
-DebugFlag('LargeBlock')
-DebugFlag('ExpiredBlock')
-DebugFlag('TestData')
-#DebugFlag('CheckAddr')
+    deviceConfigFile = Param.String("ini/DDR3_micron_32M_8B_x8_sg15.ini",
+                                    "Device configuration file")
+    systemConfigFile = Param.String("system.ini.example",
+                                    "Memory organisation configuration file")
+    filePath = Param.String("ext/dramsim2/DRAMSim2/",
+                            "Directory to prepend to file names")
+    traceFile = Param.String("", "Output file for trace generation")
+    enableDebug = Param.Bool(False, "Enable DRAMSim2 debug output")

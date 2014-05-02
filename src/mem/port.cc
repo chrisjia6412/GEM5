@@ -207,6 +207,8 @@ MasterPort::printAddr(Addr a)
     sendFunctional(&pkt);
 }
 
+
+
 /**
  * Slave port
  */
@@ -265,4 +267,10 @@ void
 SlavePort::sendRetry()
 {
     _masterPort->recvRetry();
+}
+
+bool
+SlavePort::sendCheckAddr(Addr a) {
+    return _masterPort->recvCheckAddr(a);
+
 }

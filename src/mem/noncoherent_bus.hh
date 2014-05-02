@@ -171,6 +171,8 @@ class NoncoherentBus : public BaseBus
         virtual void recvRetry()
         { bus.recvRetry(id); }
 
+        //virtual bool recvCheckAddr(Addr a) {return true;}
+
     };
 
     /** Function called by the port when the bus is recieving a Timing

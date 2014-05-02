@@ -49,6 +49,7 @@
 
 #include "base/intmath.hh"
 #include "debug/Cache.hh"
+#include "debug/SttCache.hh"
 #include "debug/CacheRepl.hh"
 #include "debug/DeadStat.hh"
 #include "debug/TestTags.hh"
@@ -83,6 +84,7 @@ LRU::LRU(const Params *p)
     setShift = floorLog2(blkSize);
     setMask = numSets - 1;
     tagShift = setShift + floorLog2(numSets);
+    printf("edram setshift %x, tagshift %x, blksize %d, assoc %d, # sets %d\n",setShift,tagShift,blkSize,assoc,numSets);
     warmedUp = false;
     /** @todo Make warmup percentage a parameter. */
     warmupBound = numSets * assoc;
@@ -170,6 +172,11 @@ LRU::eDRAM_accessBlock(Addr align_addr, Addr addr, Cycles &lat, int master_id,in
           // move this block to head of the MRU list
           sets[temp_set].moveToHead(blk);
           blk->reUsed = true;
+          /*DPRINTF(SttCache,"Previous expired %d, new expired %d\n",blk->setExpired,clockEdge()+expiredPeriod);
+          if((clockEdge()+expiredPeriod) > blk->expired_count) {
+              blk->setExpiredTime(clockEdge()+expiredPeriod);
+              result = true;
+          }*/
           DPRINTF(CacheRepl, "Move sub block %d set %x: moving blk %x to MRU\n",
                   i, temp_set, regenerateBlkAddr(temp_tag, temp_set));
           if (temp_addr == addr && blk->whenReady > curTick()
@@ -282,6 +289,12 @@ LRU::insertBlock(PacketPtr pkt, BlkType *blk, int &num_dead_on_arrival_, int &nu
 void
 LRU::invalidate(BlkType *blk)
 {
+    if(blk->isValid() && regenerateBlkAddr(blk->tag,blk->set) == 0x8f9c0) {
+        DPRINTF(SttCache,"EDRAM invalidates at 0x8f9c0\n");
+    }
+    if(blk->isValid()) {
+        DPRINTF(SttCache,"EDRAM invalidates at %x\n",regenerateBlkAddr(blk->tag,blk->set));
+    }
     assert(blk);
     assert(blk->isValid());
     tagsInUse--;

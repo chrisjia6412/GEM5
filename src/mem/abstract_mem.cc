@@ -46,6 +46,7 @@
 #include "config/the_isa.hh"
 #include "debug/LLSC.hh"
 #include "debug/MemoryAccess.hh"
+#include "debug/HWfetch.hh"
 #include "mem/abstract_mem.hh"
 #include "mem/packet_access.hh"
 #include "sim/system.hh"
@@ -384,7 +385,13 @@ AbstractMemory::access(PacketPtr pkt)
     }
 
     if (pkt->needsResponse()) {
+        if(pkt->getAddr() == 0x8f9c0) {
+            DPRINTF(HWfetch,"Mem, before make response, 0x8f9c0, cmd %s\n",pkt->cmdString());
+        }
         pkt->makeResponse();
+        if(pkt->getAddr() == 0x8f9c0) {
+            DPRINTF(HWfetch,"Mem, after make response, 0x8f9c0, cmd %s\n",pkt->cmdString());
+        }
     }
 }
 

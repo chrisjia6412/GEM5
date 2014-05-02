@@ -51,6 +51,8 @@
 #include "base/trace.hh"
 #include "debug/BusAddrRanges.hh"
 #include "debug/CoherentBus.hh"
+#include "debug/HWfetch.hh"
+#include "debug/CheckAddr.hh"
 #include "mem/coherent_bus.hh"
 #include "sim/system.hh"
 
@@ -136,7 +138,9 @@ bool
 CoherentBus::recvTimingReq(PacketPtr pkt, PortID slave_port_id)
 {
 
-    DPRINTF(CoherentBus, "is bottom level bus ? %d\n",isBottomLevel);
+    if(isBottomLevel && pkt->getAddr() == 0x8f9c0) {
+        DPRINTF(HWfetch, "coherent bus recv req for addr 0x8f9c0, %s\n",pkt->cmdString());
+    }
     // determine the source port based on the id
     SlavePort *src_port = slavePorts[slave_port_id];
 
@@ -304,6 +308,26 @@ CoherentBus::recvTimingResp(PacketPtr pkt, PortID master_port_id)
     transDist[pkt_cmd]++;
 
     return true;
+}
+
+/** Qi: recvCheckAddr
+ */
+bool
+CoherentBus::recvCheckAddr(Addr a) {
+    DPRINTF(CheckAddr, "%s for HWPrefetch address %x\n", __func__,a);
+
+    bool result = false;
+    for (SlavePortIter s = snoopPorts.begin(); s != snoopPorts.end(); ++s) {
+        SlavePort *p = *s;
+        // we could have gotten this request from a snooping master
+        // (corresponding to our own slave port that is also in
+        // snoopPorts) and should not send it back to where it came
+        // from
+        // cache is not allowed to refuse snoop
+        if(p->sendCheckAddr(a))    result = true;
+    } 
+
+    return result;
 }
 
 void

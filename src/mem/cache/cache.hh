@@ -59,6 +59,7 @@
 #include "mem/cache/mshr.hh"
 #include "mem/cache/tags/lrustt.hh"
 #include "sim/eventq.hh"
+#include "debug/CheckAddr.hh"
 
 //Forward decleration
 class BasePrefetcher;
@@ -102,6 +103,11 @@ class Cache : public BaseCache
         virtual void recvFunctional(PacketPtr pkt);
 
         virtual AddrRangeList getAddrRanges() const;
+     
+        /*bool sendCheckAddr(Addr a) { 
+            DPRINTF(CheckAddr,"send Check Addr %x\n",a);
+            return _masterPort->recvCheckAddr(a); 
+        }*/
 
       public:
 
@@ -161,6 +167,11 @@ class Cache : public BaseCache
         virtual Tick recvAtomicSnoop(PacketPtr pkt);
 
         virtual void recvFunctionalSnoop(PacketPtr pkt);
+        
+        bool recvCheckAddr(Addr a) {
+            DPRINTF(CheckAddr,"Recv Check Addr %x\n",a);
+            return cache->recvCheckAddr(a);
+        }
 
       public:
 
@@ -291,6 +302,10 @@ class Cache : public BaseCache
      * @return The number of ticks required for the snoop.
      */
     Tick recvAtomicSnoop(PacketPtr pkt);
+
+    /** Qi: recv addr check
+     */
+    bool recvCheckAddr(Addr a);
 
     /**
      * Performs the access specified by the request.

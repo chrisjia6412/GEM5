@@ -103,6 +103,7 @@ class RubyPort : public MemObject
 
       protected:
         virtual bool recvTimingResp(PacketPtr pkt);
+        //virtual bool recvCheckAddr(Addr a) {return true;}
     };
 
     friend class PioPort;

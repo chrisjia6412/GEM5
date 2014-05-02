@@ -498,6 +498,10 @@ BaseCache::regStats()
                 .desc("# of EDRAM hit")
                 ;
 
+        timingInstructions
+                .name(name() + ".timing_instructions")
+                .desc("# of instructions in timing model")
+                ;
 
     writebacks
         .init(system->maxMasters())

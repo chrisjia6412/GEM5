@@ -224,6 +224,7 @@ class Bridge : public MemObject
         /** When receiving a address range request the peer port,
             pass it to the bridge. */
         AddrRangeList getAddrRanges() const;
+
     };
 
 
@@ -321,6 +322,9 @@ class Bridge : public MemObject
         /** When receiving a retry request from the peer port,
             pass it to the bridge. */
         void recvRetry();
+
+
+        //bool recvCheckAddr(Addr a) {return true;}
     };
 
     /** Slave port of the bridge. */

@@ -56,7 +56,7 @@ using namespace std;
 
 BaseTags::BaseTags(const Params *p)
     : ClockedObject(p), blkSize(p->block_size), size(p->size),
-      hitLatency(p->hit_latency)
+      hitLatency(p->hit_latency),expiredPeriod(p->expired_period)
 {
 }
 

@@ -53,6 +53,9 @@ class BaseTags(ClockedObject):
     hit_latency = Param.Cycles(Parent.hit_latency,
                                "The hit latency for this cache")
 
+    # Get the expired time of edram
+    expired_period = Param.Cycles(Parent.expired_period, "The expired period")
+
 class LRU(BaseTags):
     type = 'LRU'
     cxx_class = 'LRU'

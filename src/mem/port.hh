@@ -322,6 +322,10 @@ class MasterPort : public BaseMasterPort
      * interconnect component like a bus.
      */
     virtual void recvRangeChange() { }
+
+    /** Qi:Receive to check whether the addr is kept in current level cache
+     */
+    virtual bool recvCheckAddr(Addr a){return true;}
 };
 
 /**
@@ -414,6 +418,10 @@ class SlavePort : public BaseSlavePort
      * @return a list of ranges responded to
      */
     virtual AddrRangeList getAddrRanges() const = 0;
+
+    /** Qi: Send to check whether the addr is hit in up level cache
+     */
+    bool sendCheckAddr(Addr a);
 
   protected:
 

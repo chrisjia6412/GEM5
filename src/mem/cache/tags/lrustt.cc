@@ -49,6 +49,7 @@
 
 #include "base/intmath.hh"
 #include "debug/Cache.hh"
+#include "debug/SttCache.hh"
 #include "debug/CacheRepl.hh"
 #include "debug/SttCacheRepl.hh"
 #include "debug/DeadStat.hh"
@@ -85,6 +86,7 @@ LRUSTT::LRUSTT(const Params *p)
     setShift = floorLog2(blkSize);
     setMask = numSets - 1;
     tagShift = setShift + floorLog2(numSets);
+    printf("stt ram, setshift %x, tagshift %x, blksize %d, assoc %d, # set %d\n",setShift,tagShift,blkSize,assoc,numSets);
     warmedUp = false;
     /** @todo Make warmup percentage a parameter. */
     warmupBound = numSets * assoc;
@@ -286,6 +288,7 @@ LRUSTT::insertBlockNoPkt(Addr addr, BlkType *blk)
 {
     //printf("using lru\n");
     //MasterID master_id = pkt->req->masterId();
+    DPRINTF(SttCache,"insert block at addr %x\n",addr);
     if (!blk->isTouched) {
         tagsInUse++;
         blk->isTouched = true;
@@ -336,6 +339,8 @@ LRUSTT::invalidate(BlkType *blk)
     assert(blk->srcMasterId < cache->system->maxMasters());
     occupancies[blk->srcMasterId]--;
     blk->srcMasterId = Request::invldMasterId;
+    if(blk->isValid())
+        DPRINTF(SttCache,"Stt Ram invalidate at addr %x\n",regenerateBlkAddr(blk->tag,blk->set));
 
     // should be evicted before valid blocks
     unsigned set = blk->set;
