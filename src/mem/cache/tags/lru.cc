@@ -168,15 +168,14 @@ LRU::eDRAM_accessBlock(Addr align_addr, Addr addr, Cycles &lat, int master_id,in
       Addr temp_tag = extractTag(temp_addr);
       BlkType *blk = sets[temp_set].findBlk(temp_tag);
       //lat = hitLatency;
-      if (blk != NULL) {
+      if (required_blk !=NULL && blk != NULL) {
           // move this block to head of the MRU list
           sets[temp_set].moveToHead(blk);
           blk->reUsed = true;
-          /*DPRINTF(SttCache,"Previous expired %d, new expired %d\n",blk->setExpired,clockEdge()+expiredPeriod);
-          if((clockEdge()+expiredPeriod) > blk->expired_count) {
+          DPRINTF(SttCache,"Previous expired %d, new expired %d, clockEdge %d, expiredPeriod %d\n",blk->expired_count,clockEdge()+expiredPeriod,clockEdge(),expiredPeriod);
+          if(required_blk != NULL && (clockEdge()+expiredPeriod) > blk->expired_count) {
               blk->setExpiredTime(clockEdge()+expiredPeriod);
-              result = true;
-          }*/
+          }
           DPRINTF(CacheRepl, "Move sub block %d set %x: moving blk %x to MRU\n",
                   i, temp_set, regenerateBlkAddr(temp_tag, temp_set));
           if (temp_addr == addr && blk->whenReady > curTick()

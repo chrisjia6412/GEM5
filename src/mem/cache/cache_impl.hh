@@ -398,8 +398,16 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
         if (pkt->needsExclusive() ? blk->isWritable() : blk->isReadable()) {
             // OK to satisfy access
             //Qi: reassign the expire time
-            if(isBottomLevel && blk->sourceTag == 0 && (clockEdge()+expiredPeriod)>blk->expired_count) {
-                blk->setExpiredTime(clockEdge()+expiredPeriod);
+            if(isBottomLevel) {
+                DPRINTF(SttCache,"clockEdge %d, expiredPeriod %d, total %d\n",clockEdge(),expiredPeriod, clockEdge()+expiredPeriod);
+                if(blk->expired_count <= clockEdge() + expiredPeriod) {
+                    assert(clockEdge() + expiredPeriod == blk->expired_count);
+                }
+                assert(clockEdge()+expiredPeriod <= blk->expired_count);
+            }
+            if(isBottomLevel && blk->sourceTag == 0 && (clockEdge()+expiredPeriod)>=blk->expired_count) {
+                setExpired(clockEdge()+expiredPeriod,blk,pkt->getAddr());
+                /*blk->setExpiredTime(clockEdge()+expiredPeriod);
                 DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",pkt->getAddr(),blk->expired_count);
 
  	        if(!handleExpiredEvent.scheduled())
@@ -407,7 +415,7 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 	        else {
 		    DPRINTF(ExpiredBlock,"wait for reschedule, push tick %ld\n",blk->expired_count);
 		    PendingExpiredQueue.push_back(blk->expired_count);
-                }
+                }*/
             }
 
             incHitCount(pkt);
@@ -443,14 +451,15 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 	    int closing_writes=0;
             tags->insertBlock(pkt, blk, dead_on_arrival, closing_writes);
 	    if(isBottomLevel) {
-	        blk->setExpiredTime(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod()  + expiredPeriod);
+                setExpired(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod()  + expiredPeriod,blk,pkt->getAddr());
+	        /*blk->setExpiredTime(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod()  + expiredPeriod);
 		DPRINTF(ExpiredBlock,"try schedule expired check at writeback operation, addr %x, time %d\n",pkt->getAddr(),blk->expired_count);
 		if(!handleExpiredEvent.scheduled())
 		    schedule(handleExpiredEvent,blk->expired_count);
 		else {
 		    DPRINTF(ExpiredBlock,"wait for reschedule, push tick %ld\n",blk->expired_count);
 		    PendingExpiredQueue.push_back(blk->expired_count);
-		}
+		}*/
 	    }
 	    if(dead_on_arrival != 0)
 	    	num_dead_on_arrival++;
@@ -463,15 +472,23 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 	//if(blk->blkSource == BlockFill && blk->refCount == 0)
 		//num_dead_value++;
         else {
-            if(isBottomLevel && blk->sourceTag == 0 && (clockEdge()+expiredPeriod)>blk->expired_count) {
-                blk->setExpiredTime(clockEdge()+expiredPeriod);
+            if(isBottomLevel) {
+                DPRINTF(SttCache,"clockEdge %d, expiredPeriod %d, total %d\n",clockEdge(),expiredPeriod, clockEdge()+expiredPeriod);
+                if(blk->expired_count <= clockEdge() + expiredPeriod) {
+                    assert(clockEdge() + expiredPeriod == blk->expired_count);
+                }
+                assert(clockEdge()+expiredPeriod <= blk->expired_count);
+            }
+            if(isBottomLevel && blk->sourceTag == 0 && (clockEdge()+expiredPeriod)>=blk->expired_count) {
+                setExpired(clockEdge()+expiredPeriod,blk,pkt->getAddr());
+                /*blk->setExpiredTime(clockEdge()+expiredPeriod);
                 DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",tags->regenerateBlkAddr(blk->tag,blk->set),blk->expired_count);
                 if(!handleExpiredEvent.scheduled())
 	            schedule(handleExpiredEvent,blk->expired_count);
 	        else {
 		    DPRINTF(ExpiredBlock,"wait for reschedule\n");
 		    PendingExpiredQueue.push_back(blk->expired_count);
-                }
+                }*/
             }
         }
         std::memcpy(blk->data, pkt->getPtr<uint8_t>(), blkSize);
@@ -1527,6 +1544,19 @@ Cache<TagStore>::handleExpired() {
 }
 
 template<class TagStore>
+void
+Cache<TagStore>::setExpired(Tick expired_, BlkType *blk_, Addr addr_) {
+    blk_->setExpiredTime(expired_);
+    DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",addr_,blk_->expired_count);
+    if(!handleExpiredEvent.scheduled())
+        schedule(handleExpiredEvent, blk_->expired_count);
+    else {
+        DPRINTF(ExpiredBlock,"wait for reschedule,push tick %ld\n",blk_->expired_count);
+	PendingExpiredQueue.push_back(blk_->expired_count);
+    }
+}
+
+template<class TagStore>
 bool
 Cache<TagStore>::checkExpiredVisitor(BlkType &blk) {
     PacketList writebacks;
@@ -1619,14 +1649,15 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
 		int closing_writes=0;
            	tags->insertBlock(pkt, blk, dead_on_arrival, closing_writes);
 		if(isBottomLevel) {
-		    blk->setExpiredTime(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod() + pkt->busLastWordDelay + expiredPeriod);
+                    setExpired(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod() + pkt->busLastWordDelay + expiredPeriod,blk,pkt->getAddr());
+		    /*blk->setExpiredTime(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod() + pkt->busLastWordDelay + expiredPeriod);
 		    DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",pkt->getAddr(),blk->expired_count);
 		    if(!handleExpiredEvent.scheduled())
 		        schedule(handleExpiredEvent, blk->expired_count);
 		    else {
 		        DPRINTF(ExpiredBlock,"wait for reschedule,push tick %ld\n",blk->expired_count);
 			PendingExpiredQueue.push_back(blk->expired_count);
-		    }
+		    }*/
                 }
 		if(dead_on_arrival != 0)
 			num_dead_on_arrival++;
