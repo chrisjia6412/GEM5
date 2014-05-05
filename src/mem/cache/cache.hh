@@ -459,6 +459,7 @@ class Cache : public BaseCache
     EventWrapper<Cache, &Cache::handleExpired> handleExpiredEvent;
     bool checkExpiredVisitor(BlkType &blk);
     void setExpired(Tick expired_, BlkType *blk_, Addr addr_);
+    void prefetchLargeBlk(Addr ori_addr, PacketPtr pkt, Tick time);
 };
 
 #endif // __CACHE_HH__

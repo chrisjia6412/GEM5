@@ -66,10 +66,10 @@ class Nehalem_BP(BranchPredictor):
     predType = "tournament"
     localCtrBits = 2
     localHistoryTableSize = 64
-    localHistoryBits = 6
+    #localHistoryBits = 6
     globalPredictorSize = 8192
     globalCtrBits = 2
-    globalHistoryBits = 13
+    #globalHistoryBits = 13
     choicePredictorSize = 8192
     choiceCtrBits = 2
     BTBEntries = 2048

@@ -67,6 +67,7 @@ class L2Cache(BaseCache):
     response_latency = 10
     mshrs = 20
     is_bottom_level = True
+    eDRAM_cache_line_size = 128
     expired_period = 20000000
     tgts_per_mshr = 12
     write_buffers = 8

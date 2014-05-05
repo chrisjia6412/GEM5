@@ -332,7 +332,8 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
     if(pkt->isWrite())  lat = writeLatency;
 
     int id = pkt->req->hasContextId() ? pkt->req->contextId() : -1;
-    Addr align_addr = pkt->getAddr() & ~(Addr(eDRAMblkSize - 1));
+    //Addr align_addr = pkt->getAddr() & ~(Addr(eDRAMblkSize - 1));
+    Addr align_addr = eDRAM_blkAlign(pkt->getAddr());
     int num_sub_block = int(eDRAMblkSize / blkSize);
     DPRINTF(Cache,"align addr %x, # sub blocks %d\n",align_addr,num_sub_block);
     if(!isBottomLevel)
@@ -792,10 +793,10 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
             }
 
 	    if(isBottomLevel) {
-            //if(1) {
-	        Addr blk_addr2 = (blk_addr == (pkt->getAddr()&~(Addr(eDRAMblkSize-1)))) ? blk_addr + blkSize : blk_addr - blkSize;
-                //MSHR *mshr2 = mshrQueue.findMatch(blk_addr2);
-	        
+
+                prefetchLargeBlk(blk_addr,pkt,time);
+
+	        /*Addr blk_addr2 = (blk_addr == (pkt->getAddr()&~(Addr(eDRAMblkSize-1)))) ? blk_addr + blkSize : blk_addr - blkSize;
                 DPRINTF(CheckAddr,"Check hit in higher level cache for addr %x\n",blk_addr2);
 	        if(!tags->findBlock(blk_addr2) && !stt_tags->findBlock(blk_addr2) && !mshrQueue.findMatch(blk_addr2) && !writeBuffer.findMatch(blk_addr2)) {
 	            DPRINTF(LargeBlock, "try fetch sub block addr %x, orignial sub block addr %x\n",blk_addr2,blk_addr);
@@ -810,7 +811,7 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
 		    subBlockPkt->setOriCmd(MemCmd::HardPFReq);
 	            assert(subBlockPkt->needsResponse());
 	            allocateMissBuffer(subBlockPkt, time, true);
-	        }
+	        }*/
             }   
         }
     }
@@ -828,6 +829,33 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
     }
 
     return true;
+}
+
+template<class TagStore>
+void
+Cache<TagStore>::prefetchLargeBlk(Addr ori_addr, PacketPtr pkt, Tick time) {
+    int num_blk = int(eDRAMblkSize/blkSize);
+    Addr base_addr = eDRAM_blkAlign(pkt->getAddr());
+    while(num_blk != 0) {
+        Addr blk_addr = base_addr + (num_blk - 1) * blkSize;
+        if(blk_addr != ori_addr) {
+            if(!tags->findBlock(blk_addr) && !stt_tags->findBlock(blk_addr)
+               && !mshrQueue.findMatch(blk_addr) 
+               && !writeBuffer.findMatch(blk_addr)) {
+                
+                DPRINTF(LargeBlock, "try fetch sub block addr %x, orignial sub block addr %x\n",blk_addr,ori_addr);
+       	        Request *subBlockReq = new Request(blk_addr, blkSize, 0, pkt->req->masterId());
+                PacketPtr subBlockPkt = new Packet(subBlockReq, MemCmd::HardPFReq);
+   	        subBlockPkt->allocate();
+                subBlockPkt->req->setThreadContext(pkt->req->contextId(), pkt->req->threadId());
+                subBlockPkt->setBaseAddr(ori_addr);
+                subBlockPkt->setOriCmd(MemCmd::HardPFReq);
+                assert(subBlockPkt->needsResponse());
+                allocateMissBuffer(subBlockPkt, time, true);
+            }
+        }
+        num_blk--;
+    }
 }
 
 

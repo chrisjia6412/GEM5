@@ -77,7 +77,7 @@ class BaseCache(MemObject):
     mem_side = MasterPort("Port on side closer to MEM")
     addr_ranges = VectorParam.AddrRange([AllMemory], "The address range for the CPU-side port")
     system = Param.System(Parent.any, "System we belong to")
-    eDRAM_cache_line_size = Param.Unsigned(128,"eDRAM cache line size in bytes")
+    eDRAM_cache_line_size = Param.Unsigned(256,"eDRAM cache line size in bytes")
     tags = Param.BaseTags(LRU(), "Tag Store for LRU caches")
     #tags2 = Param.BaseTags(LRU(), "Another Tag Store for LRU caches, to increase blk size")
     stt_tags = Param.BaseTags(LRUSTT(), "Tags Store for STT LRU caches")
