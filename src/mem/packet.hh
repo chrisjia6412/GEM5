@@ -289,6 +289,9 @@ class Packet : public Printable
     /// physical, depending on the system configuration.
     Addr addr;
 
+    /// The original addr, which is not aligned, just for locality
+    Addr ori_addr;
+
     //Used for prefetch packet, indicate for which addr the prefetches are for.
     //only set for prefetch insts
     Addr baseAddr;
@@ -560,6 +563,7 @@ class Packet : public Printable
     void clearDest() { dest = InvalidPortID; }
 
     Addr getAddr() const { assert(flags.isSet(VALID_ADDR)); return addr; }
+    Addr getOriAddr() const { assert(flags.isSet(VALID_ADDR)); return ori_addr; }
     Addr getBaseAddr() const { assert(flags.isSet(VALID_ADDR)); return baseAddr;}
     /**
      * Update the address of this packet mid-transaction. This is used
@@ -618,6 +622,7 @@ class Packet : public Printable
         original_cmd = MemCmd::InvalidCmd;
         if (req->hasPaddr()) {
             addr = req->getPaddr();
+            ori_addr = req->getPaddr();
             flags.set(VALID_ADDR);
         }
         if (req->hasSize()) {
@@ -642,6 +647,7 @@ class Packet : public Printable
         original_cmd = MemCmd::InvalidCmd;
         if (req->hasPaddr()) {
             addr = req->getPaddr() & ~(_blkSize - 1);
+            ori_addr = req->getPaddr();
             flags.set(VALID_ADDR);
         }
         size = _blkSize;
@@ -658,7 +664,8 @@ class Packet : public Printable
     Packet(Packet *pkt, bool clearFlags = false)
         :  cmd(pkt->cmd), req(pkt->req),
            data(pkt->flags.isSet(STATIC_DATA) ? pkt->data : NULL),
-           addr(pkt->addr), size(pkt->size), src(pkt->src), dest(pkt->dest),
+           addr(pkt->addr), ori_addr(pkt->ori_addr), size(pkt->size), 
+           src(pkt->src), dest(pkt->dest),
            bytesValidStart(pkt->bytesValidStart),
            bytesValidEnd(pkt->bytesValidEnd),
            busFirstWordDelay(pkt->busFirstWordDelay),
@@ -702,6 +709,7 @@ class Packet : public Printable
         assert(req->hasPaddr());
         flags = 0;
         addr = req->getPaddr();
+        ori_addr = req->getPaddr();
         size = req->getSize();
 
         src = InvalidPortID;

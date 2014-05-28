@@ -84,6 +84,9 @@ BaseCache::BaseCache(const Params *p)
       forwardSnoops(p->forward_snoops),
       isTopLevel(p->is_top_level),
       isBottomLevel(p->is_bottom_level),
+      isLLC(p->is_LLC),
+      localityMode(p->locality_Mode),
+      largeBlockEnabled(p->large_block_enabled),
       expiredPeriod(p->expired_period),
       blocked(0),
       noTargetMSHR(NULL),
@@ -483,11 +486,11 @@ BaseCache::regStats()
                 .desc("# of blks unreused")
                 ;
 
-        sttRamAccesses
-                .name(name() + ".STT_RAM_access")
-                .desc("# of STT RAM access")
+        expiredBlkNum
+                .name(name() + ".expired_blk_num")
+                .desc("# of blks expire")
                 ;
-   
+
         sttRamHit
                 .name(name() + ".STT_RAM_hit")
                 .desc("# of STT RAM hit")
@@ -498,10 +501,34 @@ BaseCache::regStats()
                 .desc("# of EDRAM hit")
                 ;
 
+        LLCMiss
+                .name(name() + ".LLCMiss")
+                .desc("# of LLC miss")
+                ;
+
+        sttRamAccesses
+                .name(name() + ".STT_RAM_access")
+                .desc("# of STT RAM access")
+                ;
+
         timingInstructions
                 .name(name() + ".timing_instructions")
                 .desc("# of instructions in timing model")
                 ;
+
+    sttHitRate
+        .name(name() + ".stt_hit_rate")
+        .desc("number of writebacks")
+        .flags(total | nozero | nonan)
+        ;
+    sttHitRate = sttRamHit/sttRamAccesses;
+
+    edRamHitRate
+        .name(name() + ".edRam_hit_rate")
+        .desc("number of writebacks")
+        .flags(total | nozero | nonan)
+        ;
+    edRamHitRate = edRamHit/sttRamAccesses;
 
     writebacks
         .init(system->maxMasters())

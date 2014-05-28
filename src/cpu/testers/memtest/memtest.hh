@@ -103,6 +103,8 @@ class MemTest : public MemObject
         virtual void recvFunctionalSnoop(PacketPtr pkt) { }
 
         virtual void recvRetry();
+
+        //virtual bool recvCheckAddr(Addr a) { return true;}
     };
 
     CpuPort cachePort;

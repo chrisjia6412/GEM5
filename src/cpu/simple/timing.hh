@@ -166,6 +166,8 @@ class TimingSimpleCPU : public BaseSimpleCPU
          * Snooping a coherence request, do nothing.
          */
         virtual void recvTimingSnoopReq(PacketPtr pkt) { }
+     
+        //virtual bool recvCheckAddr(Addr a) { return true; }
 
         TimingSimpleCPU* cpu;
 
@@ -197,6 +199,8 @@ class TimingSimpleCPU : public BaseSimpleCPU
 
         virtual void recvRetry();
 
+        //virtual bool recvCheckAddr(Addr a) { return true; }
+
         struct ITickEvent : public TickEvent
         {
 
@@ -224,6 +228,8 @@ class TimingSimpleCPU : public BaseSimpleCPU
         virtual bool recvTimingResp(PacketPtr pkt);
 
         virtual void recvRetry();
+   
+        //virtual bool recvCheckAddr(Addr a) { return true;}
 
         struct DTickEvent : public TickEvent
         {

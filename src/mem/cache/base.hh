@@ -288,9 +288,22 @@ class BaseCache : public MemObject
     const bool isTopLevel;
 
     /** Is the cache a last level cache. If so, we need to deal with different 
-     *  block size
+     *  block size, used to control whether we prefetch large block and 
+     *  use edram and sttram, the name should be changed to useOpt.
      */
     bool isBottomLevel;
+
+    /** Param indicating whether the current level is LLC
+     */
+    bool isLLC;
+
+    /** Param indicating whether we are in collecting locality mode
+     */
+    bool localityMode;
+
+    /** Param indicating if large cache line size is enabled
+     */
+    bool largeBlockEnabled;
 
     /** The expire time of edram*/
     const int expiredPeriod;
@@ -467,11 +480,15 @@ class BaseCache : public MemObject
     Stats::Scalar transferBlkNum;
     Stats::Scalar reusedBlkNum;
     Stats::Scalar unreusedBlkNum;
+    Stats::Scalar expiredBlkNum;
 
-    Stats::Scalar sttRamAccesses;
     Stats::Scalar sttRamHit;
-    Stats::Scalar edRamHit;   
+    Stats::Scalar edRamHit;
+    Stats::Scalar LLCMiss;  
+    Stats::Scalar sttRamAccesses;
     Stats::Scalar timingInstructions; 
+    Stats::Formula sttHitRate;
+    Stats::Formula edRamHitRate;
     //Stats::Formula edRamHitRate;
     //Stats::Formula sttRamHitRate;
 

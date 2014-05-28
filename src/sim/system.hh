@@ -93,6 +93,7 @@ class System : public MemObject
         { panic("SystemPort does not receive timing!\n"); return false; }
         void recvRetry()
         { panic("SystemPort does not expect retry!\n"); }
+        //bool recvCheckAddr(Addr a) {return true;}
     };
 
     SystemPort _systemPort;

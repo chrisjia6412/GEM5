@@ -97,14 +97,16 @@ def addCommonOptions(parser):
     # Cache Options
     parser.add_option("--caches", action="store_true")
     parser.add_option("--l2cache", action="store_true")
+    parser.add_option("--l3cache", action="store_true")
     parser.add_option("--fastmem", action="store_true")
     parser.add_option("--num-dirs", type="int", default=1)
     parser.add_option("--num-l2caches", type="int", default=1)
     parser.add_option("--num-l3caches", type="int", default=1)
-    parser.add_option("--l1d_size", type="string", default="64kB")
+    parser.add_option("--l1d_size", type="string", default="32kB")
     parser.add_option("--l1i_size", type="string", default="32kB")
-    parser.add_option("--l2_size", type="string", default="2MB")
-    parser.add_option("--l3_size", type="string", default="16MB")
+    #parser.add_option("--l2_size", type="string", default="2MB")
+    parser.add_option("--l2_size", type="string", default="256kB")
+    parser.add_option("--l3_size", type="string", default="4MB")
     parser.add_option("--l1d_assoc", type="int", default=2)
     parser.add_option("--l1i_assoc", type="int", default=2)
     parser.add_option("--l2_assoc", type="int", default=8)
@@ -113,6 +115,10 @@ def addCommonOptions(parser):
 
     # Enable Ruby
     parser.add_option("--ruby", action="store_true")
+
+    # Benchmark options
+    parser.add_option("-b", "--benchmark", default="",  
+                      help="The benchmark to be loaded.")
 
     # Run duration options
     parser.add_option("-m", "--abs-max-tick", type="int", default=m5.MaxTick,
@@ -249,10 +255,10 @@ def addFSOptions(parser):
     # Benchmark options
     parser.add_option("--dual", action="store_true",
                       help="Simulate two systems attached with an ethernet link")
-    parser.add_option("-b", "--benchmark", action="store", type="string",
-                      dest="benchmark",
-                      help="Specify the benchmark to run. Available benchmarks: %s"\
-                      % DefinedBenchmarks)
+    #parser.add_option("-b", "--benchmark", action="store", type="string",
+                      #dest="benchmark",
+                      #help="Specify the benchmark to run. Available benchmarks: %s"\
+                      #% DefinedBenchmarks)
 
     # Metafile options
     parser.add_option("--etherdump", action="store", type="string", dest="etherdump",

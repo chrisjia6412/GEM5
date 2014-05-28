@@ -64,7 +64,12 @@ class BaseCache(MemObject):
     forward_snoops = Param.Bool(True,
         "forward snoops from mem side to cpu side")
     is_top_level = Param.Bool(False, "Is this cache at the top level (e.g. L1)")
-    is_bottom_level = Param.Bool(False, "Is this cache LLC")
+    # Qi: is_bottom_level is used to control whether we use edram/sttram
+    # is_LLC is the one indicating whether the current level is LLC
+    is_bottom_level = Param.Bool(False, "Is this cache bottom level")
+    is_LLC = Param.Bool(False, "Is this cache LLC")
+    locality_Mode = Param.Bool(False, "Are we in collecting locality mode");
+    large_block_enabled = Param.Bool(False,"If large cache line size enabled")
     expired_period = Param.Int(0,"retention time of edram in ticks")
     tgts_per_mshr = Param.Int("max number of accesses per MSHR")
     two_queue = Param.Bool(False,
@@ -77,7 +82,7 @@ class BaseCache(MemObject):
     mem_side = MasterPort("Port on side closer to MEM")
     addr_ranges = VectorParam.AddrRange([AllMemory], "The address range for the CPU-side port")
     system = Param.System(Parent.any, "System we belong to")
-    eDRAM_cache_line_size = Param.Unsigned(256,"eDRAM cache line size in bytes")
+    eDRAM_cache_line_size = Param.Unsigned(64,"eDRAM cache line size in bytes")
     tags = Param.BaseTags(LRU(), "Tag Store for LRU caches")
     #tags2 = Param.BaseTags(LRU(), "Another Tag Store for LRU caches, to increase blk size")
     stt_tags = Param.BaseTags(LRUSTT(), "Tags Store for STT LRU caches")

@@ -166,6 +166,14 @@ public:
     BlkType* eDRAM_accessBlock(Addr align_addr, Addr addr, Cycles &lat, int context_src, int num_sub_block);
 
 
+    /** Return the determination whether this block should be pushed into 
+     *  STT RAM. If the sub block is marked as "cannot be transferred", return f     *  alse directly. If only the current sub block is reused in the large
+     *  block then the current sub block should be pushed, return true. 
+     *  If multiple sub blocks are reused, do not push and mark 
+     *  all sub blocks as 'cannot be transferred'
+     */ 
+     bool checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block);
+
 
     /**
      * Finds the given address in the cache, do not update replacement data.

@@ -196,6 +196,11 @@ public:
     FALRUBlk* eDRAM_accessBlock(Addr align_addr, Addr addr, Cycles &lat, int context_src, int num_sub_block);
 
 
+    /** just for passing compilation
+     */
+    bool checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block) {return true;}
+
+
     /**
      * Find the block in the cache, do not update the replacement data.
      * @param addr The address to look for.

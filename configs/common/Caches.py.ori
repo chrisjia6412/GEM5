@@ -47,7 +47,7 @@ from m5.objects import *
 # specific instantiations.
 
 class L1Cache(BaseCache):
-    assoc = 4
+    assoc = 2
     size = '32kB'
     hit_latency = 2
     write_latency = 2
@@ -59,41 +59,20 @@ class L1Cache(BaseCache):
 
 class L2Cache(BaseCache):
     assoc = 8
-    #stt_assoc = 16
-    size = '256kB'
-    #stt_size = '2MB'
-    hit_latency = 6
-    write_latency = 6
-    response_latency = 6
-    mshrs = 20
-    #mshrs = 80
-    #is_bottom_level = False
-    #eDRAM_cache_line_size = 512
-    #expired_period = 20000000
-    tgts_per_mshr = 20
-    write_buffers = 8
-    #stt_read_latency = 8
-    #stt_write_latency = 40
-
-class L3Cache(BaseCache):
-    assoc = 16
     stt_assoc = 16
-    size = '4MB'
-    stt_size = '16MB'
-    hit_latency = 12
-    write_latency = 12
-    response_latency = 12
+    size = '1MB'
+    stt_size = '2MB'
+    hit_latency = 10
+    write_latency = 10
+    response_latency = 10
     #mshrs = 20
     mshrs = 80
     is_bottom_level = False
-    is_LLC = False
-    locality_Mode = False
-    large_block_enabled = False
     eDRAM_cache_line_size = 512
     expired_period = 20000000
     tgts_per_mshr = 12
     write_buffers = 8
-    stt_read_latency = 10
+    stt_read_latency = 8
     stt_write_latency = 40
 
 class IOCache(BaseCache):

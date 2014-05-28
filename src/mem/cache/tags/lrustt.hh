@@ -171,6 +171,11 @@ public:
     BlkType* findBlock(Addr addr) const;
 
     /**
+     * just for passing compilation
+     */
+    bool checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block) {return true;}
+
+    /**
      * Find a block to evict for the address provided.
      * @param addr The addr to a find a replacement candidate for.
      * @param writebacks List for any writebacks to be performed.

@@ -127,6 +127,9 @@ class CacheBlk
     /** count used to detect if block has expired in eDRAM*/
     long long int expired_count;
 
+    /** bit indicating whether the block is transferrable, defalt is true*/
+    bool transferrable;
+
     /** source indicating the blk is from stt_ram or edram*/
     /** 0 is for edram, 1 is for stt ram*/
     int sourceTag;
@@ -185,7 +188,7 @@ class CacheBlk
 
     CacheBlk()
         : asid(-1), tag(0), data(0) ,size(0), status(0), whenReady(0),
-          set(-1), isTouched(false), reUsed(false), expired_count(LLONG_MAX), sourceTag(0), refCount(0),
+          set(-1), isTouched(false), reUsed(false), expired_count(LLONG_MAX), transferrable(true), sourceTag(0), refCount(0),
           srcMasterId(Request::invldMasterId),blkSource(-1)
     {}
 
@@ -246,6 +249,9 @@ class CacheBlk
     {
         status = 0;
         isTouched = false;
+        setExpiredTime(LLONG_MAX);
+        reUsed = false;
+        transferrable = true;
         clearLoadLocks();
     }
 

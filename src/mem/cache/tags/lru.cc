@@ -84,6 +84,7 @@ LRU::LRU(const Params *p)
     setShift = floorLog2(blkSize);
     setMask = numSets - 1;
     tagShift = setShift + floorLog2(numSets);
+    cout<<name()<<" ";
     printf("edram setshift %x, tagshift %x, blksize %d, assoc %d, # sets %d\n",setShift,tagShift,blkSize,assoc,numSets);
     warmedUp = false;
     /** @todo Make warmup percentage a parameter. */
@@ -264,6 +265,8 @@ LRU::insertBlock(PacketPtr pkt, BlkType *blk, int &num_dead_on_arrival_, int &nu
     blk->setBlkSourceTag(0);
     // Reset the reused bit attached with the blk
     blk->reUsed = false;
+    //Reset the transferrable bit
+    blk->transferrable = true;
 
 	//Qi:set the source of the block
 	DPRINTF(DeadStat,"pkt mem cmd %s\n",pkt->cmd.toString());
@@ -346,4 +349,49 @@ LRU::cleanupRefs()
             ++sampledRefs;
         }
     }
+}
+
+bool LRU::checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block) {
+    int i = num_sub_block;
+    int num_reused_blk = 0;
+    BlkType *required_blk = sets[extractSet(repl_addr)].findBlk(extractTag(align_addr));
+    assert(required_blk->isValid());
+    //Qi: this block must belong to a large block which has been detected 
+    //multiple reuse sub block
+    if(!required_blk->transferrable) {
+        return true;
+    }
+    while(i != 0) {
+      Addr temp_addr = align_addr + (i-1)*blkSize;
+      unsigned temp_set = extractSet(temp_addr);
+      Addr temp_tag = extractTag(temp_addr);
+      BlkType *blk = sets[temp_set].findBlk(temp_tag);
+      if(blk != NULL && blk->reUsed) {
+          num_reused_blk++;
+      }
+      i--;
+    }
+    
+    if(num_reused_blk <= 1) {
+    //Qi: only one sub block or no block is reused in large block, return false
+        return false;
+    }
+
+    else {
+    //Qi: multiple reused block exist, please mark all sub blocks as untransferrable
+        i = num_sub_block;
+        while(i != 0) {
+            Addr temp_addr = align_addr + (i-1)*blkSize;
+            unsigned temp_set = extractSet(temp_addr);
+            Addr temp_tag = extractTag(temp_addr);
+            BlkType *blk = sets[temp_set].findBlk(temp_tag);
+            if(blk != NULL) {
+                blk->transferrable = false;
+            }
+            i--;
+        }
+ 
+        return true;
+    }
+ 
 }

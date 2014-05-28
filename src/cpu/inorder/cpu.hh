@@ -182,6 +182,8 @@ class InOrderCPU : public BaseCPU
 
         /** Ignoring snoops for now. */
         void recvTimingSnoopReq(PacketPtr pkt) { }
+
+        //bool recvCheckAddr(Addr a) { return true;}
     };
 
     /** Define TickEvent for the CPU */

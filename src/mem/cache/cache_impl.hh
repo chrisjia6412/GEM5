@@ -51,6 +51,7 @@
  * Cache definitions.
  */
 #include <climits>
+#include <fstream>
 
 #include "base/misc.hh"
 #include "base/types.hh"
@@ -63,6 +64,7 @@
 #include "debug/DeadStat.hh"
 #include "debug/SttCache.hh"
 #include "debug/TestData.hh"
+#include "debug/TestPacket.hh"
 #include "mem/cache/prefetch/base.hh"
 #include "mem/cache/blk.hh"
 #include "mem/cache/cache.hh"
@@ -312,11 +314,18 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 {
     //DPRINTF(DeadStat,"enter into access function\n");
     //result = false;
-    DPRINTF(Cache, "%s for %s address %x size %d\n", __func__,
-            pkt->cmdString(), pkt->getAddr(), pkt->getSize());
+    DPRINTF(Cache, "%s for %s address %x original address %x size %d\n", 
+           __func__, pkt->cmdString(), pkt->getAddr(), 
+           pkt->getOriAddr(), pkt->getSize());
     if(isBottomLevel && blockAlign(pkt->getAddr())==0x8f9c0) {
-    DPRINTF(SttCache, "%s for %s address 0x8f9c0 pkt addr %x, size %d\n", __func__,
-            pkt->cmdString(), pkt->getAddr(), pkt->getSize());
+        DPRINTF(SttCache, "%s for %s address 0x8f9c0 pkt addr %x, size %d\n", __func__,  pkt->cmdString(), pkt->getAddr(), pkt->getSize());
+    }
+    //Qi: collect locality information
+    if(isLLC && localityMode) {
+        FILE* fptr = fopen("locality.txt","a");
+        //printf("%lx\n",pkt->getOriAddr());
+        fprintf(fptr,"%lx\n",pkt->getOriAddr());
+        fclose(fptr);
     }
     //cout << pkt->cmdString() << endl;
     if (pkt->cmd == MemCmd::Writeback)
@@ -398,9 +407,16 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 
         if (pkt->needsExclusive() ? blk->isWritable() : blk->isReadable()) {
             // OK to satisfy access
-            //Qi: reassign the expire time
+            //Qi: reassign the expire time, collect some stats
+            if(isLLC && !isBottomLevel) {
+                sttRamHit++;
+                sttRamAccesses++;
+            }
             if(isBottomLevel) {
                 DPRINTF(SttCache,"clockEdge %d, expiredPeriod %d, total %d\n",clockEdge(),expiredPeriod, clockEdge()+expiredPeriod);
+                if(blk->sourceTag == 0)    sttRamHit++;
+                else    edRamHit++;
+                sttRamAccesses++;
                 if(blk->expired_count <= clockEdge() + expiredPeriod) {
                     assert(clockEdge() + expiredPeriod == blk->expired_count);
                 }
@@ -439,6 +455,17 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 		num_dead_value++;
 	}*/
         assert(blkSize == pkt->getSize());
+        //Qi: to prevent scenario writeback happen between HWprefetch
+        // set and HWprefetch launch, have order problem
+        if(isBottomLevel) {
+            MSHR *temp_mshr = mshrQueue.findMatch(pkt->getAddr());
+            if(temp_mshr != NULL && temp_mshr->getTarget()->pkt->cmd == MemCmd::HardPFReq) { 
+                printf("let us see how many times this scenario happens\n");
+                assert(blk == NULL);
+                incMissCount(pkt);
+                return false;
+            }
+        }
         if (blk == NULL) {
             // need to do a replacement
             blk = allocateBlock(pkt->getAddr(), writebacks);
@@ -446,6 +473,14 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
                 // no replaceable block available, give up.
                 // writeback will be forwarded to next level.
                 incMissCount(pkt);
+                if(isLLC && !isBottomLevel) {
+                    LLCMiss++;
+                    sttRamAccesses++;
+                }
+                if(isBottomLevel) {
+                    LLCMiss++;
+                    sttRamAccesses++;
+                }
                 return false;
             }
 	    int dead_on_arrival=0;
@@ -501,11 +536,31 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
         // nothing else to do; writeback doesn't expect response
         assert(!pkt->needsResponse());
         DPRINTF(Cache, "%s new state is %s\n", __func__, blk->print());
+        // Qi: collect some stats
+        if(isLLC && !isBottomLevel) {
+            sttRamHit++;
+            sttRamAccesses++;
+        }
+        if(isBottomLevel) {
+            if(blk->sourceTag == 0)    sttRamHit++;
+            else    edRamHit++;
+            sttRamAccesses++;
+        }
+
         incHitCount(pkt);
         return true;
     }
 
     incMissCount(pkt);
+    // Qi: collect some stats
+    if(isLLC && !isBottomLevel) {
+        LLCMiss++;
+        sttRamAccesses++;
+    }
+    if(isBottomLevel) {
+        LLCMiss++;
+        sttRamAccesses++;
+    }
 
     if (blk == NULL && pkt->isLLSC() && pkt->isWrite()) {
         // complete miss on store conditional... just give up now
@@ -701,6 +756,7 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
         }
 
         if (needsResponse) {
+            DPRINTF(TestPacket,"make timing response 1\n");
             pkt->makeTimingResponse();
             // @todo: Make someone pay for this
             pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;
@@ -727,7 +783,7 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
         MSHR *mshr = mshrQueue.findMatch(blk_addr);
 	
 
-        if (mshr) {
+        if (mshr && (pkt->cmd != MemCmd::Writeback)) {
             /// MSHR hit
             /// @note writebacks will be checked in getNextMSHR()
             /// for any conflicting requests to the same block
@@ -792,7 +848,7 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
                 next_pf_time = prefetcher->notify(pkt, time);
             }
 
-	    if(isBottomLevel) {
+	    if(largeBlockEnabled && (isLLC || isBottomLevel)) {
 
                 prefetchLargeBlk(blk_addr,pkt,time);
 
@@ -956,11 +1012,14 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
     BlkType *blk = NULL;
     PacketList writebacks;
     bool temp_bottom_level = isBottomLevel;
+    bool temp_LLC = isLLC;
     isBottomLevel = false;
+    isLLC = false;
  
     if (!access(pkt, blk, lat, writebacks)) {
         // MISS
         if(temp_bottom_level)    isBottomLevel = true;
+        if(temp_LLC)    isLLC = true;
         PacketPtr bus_pkt = getBusPacket(pkt, blk, pkt->needsExclusive());
 
         bool is_forward = (bus_pkt == NULL);
@@ -998,10 +1057,13 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
                     // we're updating cache state to allow us to
                     // satisfy the upstream request from the cache
                     temp_bottom_level = isBottomLevel;
+                    temp_LLC = isLLC;
                     isBottomLevel = false;
+                    isLLC = false;
                     blk = handleFill(bus_pkt, blk, writebacks);
                     satisfyCpuSideRequest(pkt, blk);
                     if(temp_bottom_level)    isBottomLevel = true;
+                    if(temp_LLC)    isLLC = true;
                 } else {
                     // we're satisfying the upstream request without
                     // modifying cache state, e.g., a write-through
@@ -1013,6 +1075,7 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
     }
 
     if(temp_bottom_level)    isBottomLevel = true;
+    if(temp_LLC)    isLLC = true;
 
     // Note that we don't invoke the prefetcher at all in atomic mode.
     // It's not clear how to do it properly, particularly for
@@ -1242,6 +1305,7 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
                     target->pkt->setData(pkt->getPtr<uint8_t>());
                 }
             }
+            DPRINTF(TestPacket,"make timing response 2\n");
             target->pkt->makeTimingResponse();
             // if this packet is an error copy that to the new packet
             if (is_error)
@@ -1500,7 +1564,16 @@ Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks)
                     blk->isDirty() ? "writeback" : "clean");
             if(isBottomLevel)
                 DPRINTF(SttCache,"blk resued ? %s\n",(blk->reUsed)?"true":"false");
-            if(isBottomLevel && !blk->reUsed) {
+            //Qi: indicate whether there are multiple dirty sub blocks in the logical large block, if yes, do not push the current block to stt ram and also mark the other sub blocks so that they will not be pushed into stt ram
+            //bool multi_reuse_blocks = tags->checkMultipleReuseBlk(repl_addr,eDRAM_blkAlign(repl_addr),eDRAMblkSize/blkSize);
+
+            bool multi_reuse_blocks = false;
+            if(isBottomLevel) {
+            //Qi: collect some stats
+                if(blk->reUsed)    reusedBlkNum++;
+                else    unreusedBlkNum++;
+            }
+            if(isBottomLevel && !blk->reUsed && !multi_reuse_blocks) {
 	        DPRINTF(SttCache,"transfer between stt and edram here, addr %x\n",repl_addr);
                 
                 handleTransferBetweenTags(repl_addr, writebacks, blk);
@@ -1514,7 +1587,7 @@ Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks)
 
             else if (blk->isDirty()) {
                 if(isBottomLevel && tags->regenerateBlkAddr(blk->tag,blk->set)==0x8f9c0) {
-                    DPRINTF(SttCache,"addr 0x8f9c0 is reused so evict from edram\n");
+                    DPRINTF(SttCache,"addr 0x8f9c0 is never reused so evict from edram\n");
                 }
                 // Save writeback packet for handling by caller
                 writebacks.push_back(writebackBlk(blk));
@@ -1522,7 +1595,7 @@ Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks)
 
             else {
                 if(isBottomLevel && tags->regenerateBlkAddr(blk->tag,blk->set)==0x8f9c0) {
-                    DPRINTF(SttCache,"addr 0x8f9c0 i reused and not dirty, wait to be replaced\n");
+                    DPRINTF(SttCache,"addr 0x8f9c0 is never reused and not dirty, wait to be replaced\n");
                 }
             }
         }
@@ -1536,6 +1609,8 @@ template<class TagStore>
 void
 Cache<TagStore>::handleTransferBetweenTags(Addr addr, PacketList &writebacks,BlkType *_blk) {
     DPRINTF(SttCache,"push addr %x to stt ram\n",addr);
+    // Qi: collect some stats
+    transferBlkNum++;
     //DPRINTF(SttCache,"handleTransfer, 0x8f9c0 %s\n",stt_tags->findBlock(0x8f9c0)==NULL ? "Miss" : "Hit");
     if(blockAlign(addr) == 0x8f9c0) {
         DPRINTF(SttCache,"0x8f9c0 from edram to sttram\n");
@@ -1592,9 +1667,15 @@ Cache<TagStore>::checkExpiredVisitor(BlkType &blk) {
     Addr repl_addr = tags->regenerateBlkAddr(blk.tag, blk.set);
     //if(blk.expired_count <= curTick() && blk.isValid() && !mshrQueue.findMatch(repl_addr) && !writeBuffer.findMatch(repl_addr)) {
     if(blk.expired_count <= curTick() && blk.isValid() && !mshrQueue.findMatch(repl_addr)) {
+        //Qi: collect some stats
+        expiredBlkNum++;
+        if(blk.reUsed)    reusedBlkNum++;
+        else    unreusedBlkNum++;
         blk.setExpiredTime(LLONG_MAX);
+        //bool multi_reuse_blocks = tags->checkMultipleReuseBlk(repl_addr,eDRAM_blkAlign(repl_addr),eDRAMblkSize/blkSize);
+        bool multi_reuse_blocks = false;
         DPRINTF(ExpiredBlock,"blk at addr %x expired, handle it\n", repl_addr);
-        if(!blk.reUsed) {
+        if(!blk.reUsed && !multi_reuse_blocks) {
             DPRINTF(ExpiredBlock,"addr %x not reused, push to stt tag\n",repl_addr);
 	    handleTransferBetweenTags(repl_addr,writebacks,&blk);
             while(!writebacks.empty()) {
@@ -1604,11 +1685,11 @@ Cache<TagStore>::checkExpiredVisitor(BlkType &blk) {
             }
         }
 	else if(blk.isDirty()) {
-            DPRINTF(SttCache,"addr %x has been used but dirty ,write back\n",repl_addr);
+            DPRINTF(SttCache,"addr %x has never been used but dirty ,write back\n",repl_addr);
 	    allocateWriteBuffer(writebackBlk(&blk),time,true);
         }
         else {
-            DPRINTF(SttCache,"addr %x has been used and clean, expire normally\n",repl_addr);
+            DPRINTF(SttCache,"addr %x has never been used and clean, expire normally\n",repl_addr);
         }
         tags->invalidate(&blk); 
         blk.invalidate();  
@@ -1698,7 +1779,7 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
         assert(!blk->isValid());
     } else {
         // existing block... probably an upgrade
-        assert(blk->tag == tags->extractTag(addr));
+        assert(blk->tag == tags->extractTag(addr) || blk->tag == stt_tags->extractTag(addr));
         // either we're getting new data or the block should already be valid
         assert(pkt->hasData() || blk->isValid());
         // don't clear block status... if block is already dirty we
@@ -1759,6 +1840,7 @@ doTimingSupplyResponse(PacketPtr req_pkt, uint8_t *blk_data,
     PacketPtr pkt = already_copied ? req_pkt : new Packet(req_pkt);
     assert(req_pkt->isInvalidate() || pkt->sharedAsserted());
     pkt->allocate();
+    DPRINTF(TestPacket,"make timing response 3\n");
     pkt->makeTimingResponse();
     // @todo Make someone pay for this
     pkt->busFirstWordDelay = pkt->busLastWordDelay = 0;

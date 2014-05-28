@@ -86,6 +86,7 @@ LRUSTT::LRUSTT(const Params *p)
     setShift = floorLog2(blkSize);
     setMask = numSets - 1;
     tagShift = setShift + floorLog2(numSets);
+    cout<<name()<<" ";
     printf("stt ram, setshift %x, tagshift %x, blksize %d, assoc %d, # set %d\n",setShift,tagShift,blkSize,assoc,numSets);
     warmedUp = false;
     /** @todo Make warmup percentage a parameter. */

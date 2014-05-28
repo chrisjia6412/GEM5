@@ -135,6 +135,7 @@ class DmaPort : public MasterPort
 
     bool recvTimingResp(PacketPtr pkt);
     void recvRetry() ;
+    //bool recvCheckAddr(Addr a) { return true;}
 
     void queueDma(PacketPtr pkt);
 
