@@ -101,9 +101,11 @@ class LRUSTT : public BaseTags
     unsigned setMask;
     /** Mask out all bits that aren't part of the block offset. */
     unsigned blkMask;
+    // for compilation
+    //unsigned alt_mech;
 
 public:
-
+    unsigned alt_mech;
     /** Convenience typedef. */
      typedef LRUSTTParams Params;
 
@@ -171,9 +173,15 @@ public:
     BlkType* findBlock(Addr addr) const;
 
     /**
-     * just for passing compilation
+     * The following 4 functions are just for passing compilation
      */
     bool checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block) {return true;}
+    BlkType* findSramVictim(Addr addr) {return NULL;}
+    BlkType* findSttRamVictim(Addr addr) {return NULL;}
+    int getBlkPos(BlkType* blk) {return 0;}
+    void moveToPos(BlkType* blk, int pos) {}
+    void printSet(Addr addr) {}
+    int getIndicatorStat(Addr addr) {return -1;}
 
     /**
      * Find a block to evict for the address provided.

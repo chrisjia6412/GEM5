@@ -52,9 +52,11 @@
 #include <climits>
 
 #include "base/printable.hh"
+#include "base/trace.hh"
 #include "mem/packet.hh"
 #include "mem/request.hh"
 #include "sim/core.hh"          // for Tick
+#include "debug/ALT1.hh"
 
 /**
  * Cache block status bit assignments
@@ -134,15 +136,48 @@ class CacheBlk
     /** 0 is for edram, 1 is for stt ram*/
     int sourceTag;
 
+    /** Qi: used or ALT1, if the blk belong to sram in hybrid cache*/
+    bool isSram;
+
+    /** Qi: used for ALT1, indicating LRU info in semi sram set*/
+    int LRUs;
+
+    /** Qi: used for ALT1,saturation counter,predicting write-intensive blocks*/
+    int SC;
+
+    /** Qi: used for ALT1, ower ID, just for semi sram set block*/
+    int OID;
+
+    /** Qi: used for ALT1, indicate whether last op to the blk is write */
+    bool lastWrite;
+
+    /** Qi: used for ALT2, indicate whether the blk is disabled, norefresh*/
+    bool disabled;
+    
+    /** Qi: used for ALT2, FSM to indicate blk is live of disable*/
+    /** 0: live 1: dead 2: disable 3--7: intermediate state*/
+    int pred_stat;
+
+    /** Qi: indicate whether it is time to update the pred state*/
+    int TIME;
+
+    /** Qi: indicate the first access time of the blk, reset when eviction*/
+    Cycles firstAcessCycle;
+
+    /** Qi: indicate which sub-blocks we prefetch when the current
+     *      sub-block is re-accessed
+     */
+    bool bit_vector[8];
+
     /** Number of references to this block since it was brought in. */
     int refCount;
 
     /** holds the source requestor ID for this block. */
     int srcMasterId;
 
-	/*Qi: the source of the block, e.g. write miss(write back from higher-level cache)/read miss(read/write miss from higher-level cache)?*/
-	int blkSource;
-	
+    /** Qi: the source of the block, e.g. write miss(write back from higher-level cache)/read miss(read/write miss from higher-level cache)?*/
+    int blkSource;
+
 
   protected:
     /**
@@ -188,9 +223,15 @@ class CacheBlk
 
     CacheBlk()
         : asid(-1), tag(0), data(0) ,size(0), status(0), whenReady(0),
-          set(-1), isTouched(false), reUsed(false), expired_count(LLONG_MAX), transferrable(true), sourceTag(0), refCount(0),
-          srcMasterId(Request::invldMasterId),blkSource(-1)
-    {}
+          set(-1), isTouched(false), reUsed(false), expired_count(LLONG_MAX), 
+          transferrable(true), sourceTag(0), isSram(false), LRUs(0), SC(0),
+          OID(-1), lastWrite(false), disabled(false), pred_stat(0), TIME(0), firstAccessCycle(0),
+          refCount(0), srcMasterId(Request::invldMasterId),blkSource(-1)
+    {
+        for(int i = 0; i < 8; i++) {
+            bit_vector[i] = false;
+        }
+    }
 
     /**
      * Copy the state of the given block into this one.
@@ -208,6 +249,9 @@ class CacheBlk
         set = rhs.set;
         refCount = rhs.refCount;
         sourceTag = rhs.sourceTag;
+        isSram = rhs.isSram;
+        expired_count = rhs.expired_count;
+        transferrable = rhs.transferrable;
         return *this;
     }
 
@@ -247,11 +291,20 @@ class CacheBlk
      */
     void invalidate()
     {
+        if(set == 0xa4) {
+            DPRINTF(ALT1,"invalidate blk in set 164\n");
+        }
         status = 0;
         isTouched = false;
         setExpiredTime(LLONG_MAX);
         reUsed = false;
         transferrable = true;
+        SC = 0;
+        OID = -1;
+        lastWrite = false;
+        disabled = false;
+        pred_stat = 0;
+        TIME = 0;
         clearLoadLocks();
     }
 

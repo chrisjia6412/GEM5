@@ -52,6 +52,7 @@
  */
 #include <climits>
 #include <fstream>
+#include <math.h>
 
 #include "base/misc.hh"
 #include "base/types.hh"
@@ -65,10 +66,16 @@
 #include "debug/SttCache.hh"
 #include "debug/TestData.hh"
 #include "debug/TestPacket.hh"
+#include "debug/ALT0.hh"
+#include "debug/ALT1.hh"
+#include "debug/ALT2.hh"
+#include "debug/ALT3.hh"
 #include "mem/cache/prefetch/base.hh"
 #include "mem/cache/blk.hh"
 #include "mem/cache/cache.hh"
 #include "mem/cache/mshr.hh"
+#include "mem/cache/sampler.cc"
+#include "mem/cache/monitor.cc"
 #include "sim/sim_exit.hh"
 #include "mem/cache/tags/lrustt.hh"
 
@@ -80,7 +87,9 @@ Cache<TagStore>::Cache(const Params *p)
       prefetcher(p->prefetcher),
       doFastWrites(true),
       prefetchOnAccess(p->prefetch_on_access),
-      handleExpiredEvent(this)
+      handleExpiredEvent(this),
+      handleRefreshEvent(this),
+      predBlkSizeEvent(this)
 {
     tempBlock = new BlkType();
     tempBlock->data = new uint8_t[blkSize];
@@ -93,6 +102,24 @@ Cache<TagStore>::Cache(const Params *p)
     assert(tags);
     //assert(tags2);
     assert(stt_tags != NULL);
+    //set the sampler
+    if(alt_mech == 3) {
+        online_sampler = new sampler(p->assoc, p->size / (64 * p->assoc * 64), p->pred_num);
+    }
+    else {
+        online_sampler = NULL;
+    }
+
+    //set the monitor(ADT + Lscore), 4 in total(64, 128, 256, 512)
+    if(isBottomLevel && alt_mech == 0) {
+        online_monitor = new monitor*[4];
+        for(int k = 0; k < 4; k++) {
+            online_monitor[k] = new monitor(p->assoc, p->size / (64 * p->assoc), 64 * ((int)(pow(2,k))), 64);
+        }
+    }
+    else {
+        online_monitor = NULL;
+    }
     tags->setCache(this);
     printf("bottom %d,tags set cache successfully, blk size %d\n",isBottomLevel,tags->getBlockSize());
     stt_tags->setCache(this);
@@ -206,6 +233,9 @@ Cache<TagStore>::satisfyCpuSideRequest(PacketPtr pkt, BlkType *blk,
                     tags->invalidate(blk);
                 else    stt_tags->invalidate(blk);
                 blk->invalidate();
+                if(alt_mech == 1) {
+                    tags->printSet(tags->regenerateBlkAddr(blk->tag,blk->set));
+                }
             } else if (blk->isWritable() && !pending_downgrade
                       && !pkt->sharedAsserted() && !pkt->req->isInstFetch()) {
                 // we can give the requester an exclusive copy (by not
@@ -341,15 +371,39 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
     if(pkt->isWrite())  lat = writeLatency;
 
     int id = pkt->req->hasContextId() ? pkt->req->contextId() : -1;
+
+    //Qi: only used for ALT0, update monitor
+    if(alt_mech == 0 && isBottomLevel) {
+        for(int k = 0; k < 4; k++) {
+            online_monitor[k]->updateMonitor(pkt);
+        }
+        if(init_Lscore == 0) {
+            DPRINTF(ALT0,"Try schedule print Lscore\n");
+            schedule(predBlkSizeEvent, clockEdge() + 100000000);
+            init_Lscore = 1;
+        }
+    }
+
+    //Qi: only used for ALT3, update pred table and get the pred result
+    bool bypass_decision = false;
+    if(alt_mech == 3 && isLLC) {
+        online_sampler->updateSampler(pkt,tags->extractSet(pkt->getAddr()),tags->extractTag(pkt->getAddr()));
+        bypass_decision = online_sampler->getPredDecision(pkt);
+        DPRINTF(ALT3,"addr %x, update sampler and get bypass decision %d\n",pkt->getAddr(),bypass_decision);
+    }
+
+
     //Addr align_addr = pkt->getAddr() & ~(Addr(eDRAMblkSize - 1));
     Addr align_addr = eDRAM_blkAlign(pkt->getAddr());
     int num_sub_block = int(eDRAMblkSize / blkSize);
     DPRINTF(Cache,"align addr %x, # sub blocks %d\n",align_addr,num_sub_block);
-    if(!isBottomLevel)
+    if(!isBottomLevel) {
         blk = tags->accessBlock(pkt->getAddr(), lat, id);
-    else 
+    }
+    else {
 	blk = tags->eDRAM_accessBlock(align_addr, pkt->getAddr(), lat, id,
 					 num_sub_block);
+    }
 
     if(blk != NULL) {
         blk->setBlkSourceTag(0);
@@ -357,6 +411,12 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
     }
 
     if(isBottomLevel && blk == NULL) {
+        if(pkt->isWrite()) {
+            lat = stt_writeLatency;
+        }
+        else {
+            lat = stt_readLatency;
+        }
         blk = stt_tags->accessBlock(pkt->getAddr(), lat, id);
 	if(blk != NULL) {
             blk->setBlkSourceTag(1);
@@ -366,6 +426,10 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
                 if(i == blkSize - 1)
                     DPRINTF(TestData,"\n");
             }
+        }
+        else {
+            if(pkt->isWrite())    lat = hitLatency;
+            else    lat = writeLatency;
         }
     }
     
@@ -383,6 +447,7 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
             pkt->getAddr(), blk ? "hit" : "miss", blk ? blk->print() : "");
 
     }
+
 	/*Qi:Hit*/
     if (blk != NULL) {
         if(blk->blkSource == BlockFill && blk->refCount <= 1 && pkt->cmd == MemCmd::Writeback)
@@ -434,9 +499,27 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 		    PendingExpiredQueue.push_back(blk->expired_count);
                 }*/
             }
-
+            
             incHitCount(pkt);
             satisfyCpuSideRequest(pkt, blk);
+            //Qi: Hit here, for ALT1 we need to upate some information
+            if(isLLC && alt_mech == 1 && !blk->isSram) {
+                //Qi: is write, update SC and lastWrite for ALT1
+                if(pkt->isWrite()) {
+                    blk->SC++;
+                    DPRINTF(ALT1,"write hit addr %x, current SC %d\n",tags->regenerateBlkAddr(blk->tag,blk->set), blk->SC);
+                    // Qi: check if meet transfer condition, if yes, transfer it from stt ram entry to sram entry
+                    if(blk->SC == 3 || (blk->SC == 2 && blk->lastWrite == true))
+                    {
+                        pushToSram(blk, writebacks);
+                    }
+                    else
+                        blk->lastWrite = true;
+                }
+                else if(pkt->isRead()) {
+                    blk->lastWrite = false;
+                }
+            }
             return true;
         }
     }
@@ -466,9 +549,10 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
                 return false;
             }
         }
+ 
         if (blk == NULL) {
             // need to do a replacement
-            blk = allocateBlock(pkt->getAddr(), writebacks);
+            blk = allocateBlock(pkt->getAddr(), writebacks,1);
             if (blk == NULL) {
                 // no replaceable block available, give up.
                 // writeback will be forwarded to next level.
@@ -502,11 +586,12 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 	    if(closing_writes != 0)
 		num_closing_writes++;
 	    DPRINTF(DeadStat, "Update dead stat here,dead_on_arrival %d, closing_writes %d\n",dead_on_arrival,closing_writes);
-            DPRINTF(SttCache,"update readable status for addr %x\n",tags->regenerateBlkAddr(blk->tag,blk->set));
+            DPRINTF(SttCache,"update readable status for addr %x\n",tags->regenerateBlkAddr(blk->tag,blk->OID));
             blk->status = BlkValid | BlkReadable;
         }
 	//if(blk->blkSource == BlockFill && blk->refCount == 0)
 		//num_dead_value++;
+        // writeback hit
         else {
             if(isBottomLevel) {
                 DPRINTF(SttCache,"clockEdge %d, expiredPeriod %d, total %d\n",clockEdge(),expiredPeriod, clockEdge()+expiredPeriod);
@@ -548,6 +633,38 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
         }
 
         incHitCount(pkt);
+        if(isLLC && alt_mech == 1 && !blk->isSram) {
+        //Qi: is write, update SC and lastWrite for ALT1
+            if(pkt->isWrite()) {
+                blk->SC++;
+                DPRINTF(ALT1,"writeback addr %x, current SC %d\n",tags->regenerateBlkAddr(blk->tag,blk->set), blk->SC);
+                // Qi: check if meet transfer condition, if yes, transfer it from stt ram entry to sram entry
+                if(blk->SC == 3 || (blk->SC == 2 && blk->lastWrite == true))
+                {
+                    pushToSram(blk, writebacks);
+                }
+                else
+                    blk->lastWrite = true;
+            }
+            else if(pkt->isRead()) {
+                blk->lastWrite = false;
+            }
+        }
+
+        //Qi: for alt3, please pay attention here, if bypass
+        //decision is true, do not write back here, write back
+        //to main memory directly, also if the blk is in llc
+        //now, we need to invalidate it first
+        if(isLLC && alt_mech == 3 && bypass_decision && pkt->cmd == MemCmd::Writeback && blk != NULL) {
+            //Qi:writeback the blk
+            writebacks.push_back(writebackBlk(blk));
+            //Qi: invalidate the blk here
+            tags->invalidate(blk);
+            blk->invalidate();
+            
+            return true;
+        }
+
         return true;
     }
 
@@ -849,7 +966,12 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
             }
 
 	    if(largeBlockEnabled && (isLLC || isBottomLevel)) {
-
+                if(testTimeStampMode) {
+                    FILE* fptr = fopen("timestamp.txt","a");
+                    //printf("%lx\n",pkt->getOriAddr());
+                    fprintf(fptr,"%lx %ld\n",blk_addr,curTick());
+                    fclose(fptr);
+                }
                 prefetchLargeBlk(blk_addr,pkt,time);
 
 	        /*Addr blk_addr2 = (blk_addr == (pkt->getAddr()&~(Addr(eDRAMblkSize-1)))) ? blk_addr + blkSize : blk_addr - blkSize;
@@ -971,6 +1093,7 @@ Tick
 Cache<TagStore>::recvAtomic(PacketPtr pkt)
 {
     Cycles lat = hitLatency;
+    int temp_tags_alt_mech;
 
     // @TODO: make this a parameter
     bool last_level_cache = false;
@@ -986,7 +1109,12 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
         if (pkt->isInvalidate()) {
             BlkType *blk = tags->findBlock(pkt->getAddr());
             if (blk && blk->isValid()) {
-                if(!isBottomLevel || blk->sourceTag == 0)    tags->invalidate(blk);
+                if(!isBottomLevel || blk->sourceTag == 0) { 
+                    temp_tags_alt_mech = tags->alt_mech;
+                    tags->alt_mech = 0;
+                    tags->invalidate(blk);
+                    tags->alt_mech = temp_tags_alt_mech;
+                }
 		else    stt_tags->invalidate(blk);
                 blk->invalidate();
                 DPRINTF(Cache, "rcvd mem-inhibited %s on 0x%x: invalidating\n",
@@ -1013,13 +1141,19 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
     PacketList writebacks;
     bool temp_bottom_level = isBottomLevel;
     bool temp_LLC = isLLC;
+    unsigned temp_alt_mech = alt_mech;
+    temp_tags_alt_mech = tags->alt_mech;
     isBottomLevel = false;
     isLLC = false;
+    alt_mech = 0;
+    tags->alt_mech = 0;
  
     if (!access(pkt, blk, lat, writebacks)) {
         // MISS
         if(temp_bottom_level)    isBottomLevel = true;
         if(temp_LLC)    isLLC = true;
+        alt_mech = temp_alt_mech;
+        tags->alt_mech = temp_tags_alt_mech;
         PacketPtr bus_pkt = getBusPacket(pkt, blk, pkt->needsExclusive());
 
         bool is_forward = (bus_pkt == NULL);
@@ -1058,12 +1192,18 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
                     // satisfy the upstream request from the cache
                     temp_bottom_level = isBottomLevel;
                     temp_LLC = isLLC;
+                    temp_alt_mech = alt_mech;
+                    temp_tags_alt_mech = tags->alt_mech;
                     isBottomLevel = false;
                     isLLC = false;
+                    alt_mech = 0;
+                    tags->alt_mech = 0;
                     blk = handleFill(bus_pkt, blk, writebacks);
                     satisfyCpuSideRequest(pkt, blk);
                     if(temp_bottom_level)    isBottomLevel = true;
                     if(temp_LLC)    isLLC = true;
+                    alt_mech = temp_alt_mech;
+                    tags->alt_mech = temp_tags_alt_mech;
                 } else {
                     // we're satisfying the upstream request without
                     // modifying cache state, e.g., a write-through
@@ -1076,6 +1216,8 @@ Cache<TagStore>::recvAtomic(PacketPtr pkt)
 
     if(temp_bottom_level)    isBottomLevel = true;
     if(temp_LLC)    isLLC = true;
+    alt_mech = temp_alt_mech;
+    tags->alt_mech = temp_tags_alt_mech;
 
     // Note that we don't invoke the prefetcher at all in atomic mode.
     // It's not clear how to do it properly, particularly for
@@ -1247,6 +1389,13 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
         assert(blk != NULL);
     }
 
+    //Qi: only used for alt3
+    bool bypass_decision = false;
+    if(isLLC && alt_mech == 3) {
+        bypass_decision = online_sampler->getPredDecision(pkt);
+        DPRINTF(ALT3,"recvTimingRecv, addr %x, bypass decision %d\n",pkt->getAddr(),bypass_decision);
+    }
+
     // First offset for critical word first calculations
     int initial_offset = 0;
 
@@ -1274,10 +1423,26 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
                 // responseLatency is the latency of the return path
                 // from lower level caches/memory to an upper level cache or
                 // the core.
-                completion_time = clockEdge(responseLatency) +
-		    writeLatency * clockPeriod() +
-                    (transfer_offset ? pkt->busLastWordDelay :
-                     pkt->busFirstWordDelay);
+                if(alt_mech == 1) {
+                    if(blk->isSram) {
+                        completion_time = clockEdge(sram_readLatency) +
+		            sram_writeLatency * clockPeriod() +
+                            (transfer_offset ? pkt->busLastWordDelay :
+                            pkt->busFirstWordDelay);
+                    }
+                    else {
+                        completion_time = clockEdge(responseLatency) +
+		            writeLatency * clockPeriod() +
+                            (transfer_offset ? pkt->busLastWordDelay :
+                            pkt->busFirstWordDelay);
+                    }
+                }
+                else {
+                    completion_time = clockEdge(responseLatency) +
+		        writeLatency * clockPeriod() +
+                        (transfer_offset ? pkt->busLastWordDelay :
+                        pkt->busFirstWordDelay);
+                }
 
                 assert(!target->pkt->req->isUncacheable());
 
@@ -1322,7 +1487,14 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
             }
             // reset the bus additional time as it is now accounted for
             target->pkt->busFirstWordDelay = target->pkt->busLastWordDelay = 0;
-            cpuSidePort->schedTimingResp(target->pkt, completion_time);
+            //Qi: if bypass in alt3, we do not need to fill in current level cache
+            //So response to higher level cache immediatly
+            if(isLLC && alt_mech == 3 && bypass_decision) {
+                cpuSidePort->schedTimingResp(target->pkt, clockEdge());
+            }
+            else {
+                cpuSidePort->schedTimingResp(target->pkt, completion_time);
+            }
             break;
 
           case MSHR::Target::FromPrefetcher:
@@ -1348,6 +1520,14 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
         }
 
         mshr->popTarget();
+    }
+
+    //Qi: if bypass in alt3, we do not fill in current level cache, invalidate the blk
+    if(isLLC && alt_mech == 3 && bypass_decision) {
+        if(blk && blk->isValid()) {
+            tags->invalidate(blk);
+            blk->invalidate();
+        }
     }
 
     if (blk && blk->isValid()) {
@@ -1399,6 +1579,9 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
 
     DPRINTF(Cache, "Leaving %s with %s for address %x\n", __func__,
             pkt->cmdString(), pkt->getAddr());
+    if(alt_mech == 1) {
+        tags->printSet(pkt->getAddr());
+    }
     delete pkt;
 }
 
@@ -1416,10 +1599,21 @@ Cache<TagStore>::writebackBlk(BlkType *blk)
     writebacks[Request::wbMasterId]++;
     Addr repl_addr = 0;
     if(blk->sourceTag == 0) {
-        repl_addr = tags->regenerateBlkAddr(blk->tag,blk->set);
+        if(blk->isSram) {
+            repl_addr = tags->regenerateBlkAddr(blk->tag,blk->OID);
+        }
+        else {
+            repl_addr = tags->regenerateBlkAddr(blk->tag,blk->set);
+        }
     }
     else if(blk->sourceTag == 1) {
-        repl_addr = stt_tags->regenerateBlkAddr(blk->tag,blk->set);
+        if(blk->isSram) {
+            repl_addr = tags->regenerateBlkAddr(blk->tag,blk->OID);
+        }
+        else {
+            repl_addr = tags->regenerateBlkAddr(blk->tag,blk->set);
+        }
+
     }
     assert(repl_addr != 0);
 
@@ -1475,10 +1669,21 @@ Cache<TagStore>::writebackVisitor(BlkType &blk)
 
         Addr repl_addr = 0;
         if(blk.sourceTag == 0) {
-            repl_addr = tags->regenerateBlkAddr(blk.tag,blk.set);
+            if(blk.isSram) {
+                repl_addr = tags->regenerateBlkAddr(blk.tag,blk.OID);
+            }
+            else {
+                repl_addr = tags->regenerateBlkAddr(blk.tag,blk.set);
+            }
+
         }
         else if(blk.sourceTag == 1) {
-            repl_addr = stt_tags->regenerateBlkAddr(blk.tag,blk.set);
+            if(blk.isSram) {
+                repl_addr = tags->regenerateBlkAddr(blk.tag,blk.OID);
+            }
+            else {
+                repl_addr = tags->regenerateBlkAddr(blk.tag,blk.set);
+            }
         }
         assert(repl_addr != 0);
 
@@ -1541,14 +1746,34 @@ Cache<TagStore>::uncacheableFlush(PacketPtr pkt)
 
 template<class TagStore>
 typename Cache<TagStore>::BlkType*
-Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks)
+Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks, int _op)
 {
-    if(isBottomLevel)   
-        DPRINTF(Cache,"LLC allocate new blk entry for addr %x\n",addr);
-    BlkType *blk = tags->findVictim(addr, writebacks);
+   
+    DPRINTF(Cache,"LLC allocate new blk entry for addr %x\n",addr);
+    BlkType *blk = NULL;
+    //Qi: for alt mech 1
+    if(isLLC && alt_mech == 1) {
+        //Qi: for read miss, allocate stt ram entry
+        if(_op == 0) {
+            blk = tags->findSttRamVictim(addr);
+        }
+        //Qi: for write miss, allocate sram entry
+        else {
+            blk = tags->findSramVictim(addr);
+        }
+    }
+    else {
+        blk = tags->findVictim(addr, writebacks);
+    }
 
     if (blk->isValid()) {
-        Addr repl_addr = tags->regenerateBlkAddr(blk->tag, blk->set);
+        Addr repl_addr = 0;
+        if(blk->isSram) {
+            repl_addr = tags->regenerateBlkAddr(blk->tag, blk->OID);
+        }
+        else {
+            repl_addr = tags->regenerateBlkAddr(blk->tag, blk->set);
+        }
         MSHR *repl_mshr = mshrQueue.findMatch(repl_addr);
         if (repl_mshr) {
             // must be an outstanding upgrade request on block
@@ -1584,6 +1809,10 @@ Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks)
 		// here we did not consider the bandwidth between the two tags
 	        // and we did not consider the bus overhead
             }
+            else if(isLLC && alt_mech == 1 && blk->isSram && blk->isValid() && tags->getBlkPos(blk) < K_value) {
+                DPRINTF(ALT1,"push addr %x to stt ram\n",addr);
+                pushToSttRam(blk,writebacks);
+            }
 
             else if (blk->isDirty()) {
                 if(isBottomLevel && tags->regenerateBlkAddr(blk->tag,blk->set)==0x8f9c0) {
@@ -1604,6 +1833,52 @@ Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks)
     return blk;
 }
 
+template<class TagStore>
+void
+Cache<TagStore>::pushToSttRam(BlkType *_blk, PacketList &writebacks) {
+    assert(_blk->isSram);
+    Addr blk_addr = tags->regenerateBlkAddr(_blk->tag, _blk->OID);
+    DPRINTF(ALT1,"push addr %x from sram to sttram\n",blk_addr);
+    BlkType *blk = allocateBlock(blk_addr, writebacks, 0);
+    if(blk == NULL) {
+        return;
+    }
+    tags->insertBlockNoPkt(blk_addr,blk);
+    blk->whenReady = clockEdge() + hitLatency * clockPeriod() + writeLatency * clockPeriod();
+    blk->status = _blk->status;
+    blk->srcMasterId = _blk->srcMasterId;
+    assert(blk->isReadable());
+    std::memcpy(blk->data, _blk->data, blkSize);
+
+    //Qi: invalidate the original stt ram entry
+    tags->invalidate(_blk);
+    _blk->invalidate();
+    //Qi: move the corresponding stt ram entry to specified position
+    tags->moveToPos(blk, K_value);
+}
+
+template<class TagStore>
+void
+Cache<TagStore>::pushToSram(BlkType *_blk, PacketList &writebacks) {
+    assert(!(_blk->isSram));
+    Addr blk_addr = tags->regenerateBlkAddr(_blk->tag, _blk->set);
+    DPRINTF(ALT1,"push addr %x from stt ram to sram\n",blk_addr);
+    BlkType *blk = allocateBlock(blk_addr, writebacks, 1);
+    if(blk == NULL) {
+        return;
+    }
+    tags->insertBlockNoPkt(blk_addr,blk);
+    blk->whenReady = clockEdge() + sram_readLatency * clockPeriod() + sram_writeLatency * clockPeriod();
+    blk->status = _blk->status;
+    blk->srcMasterId = _blk->srcMasterId;
+    assert(blk->OID == _blk->set);
+    assert(blk->isReadable());
+    std::memcpy(blk->data, _blk->data, blkSize);
+
+    //Qi: invalidate the original stt ram entry
+    tags->invalidate(_blk);
+    _blk->invalidate();
+}
 
 template<class TagStore>
 void
@@ -1648,6 +1923,42 @@ Cache<TagStore>::handleExpired() {
 
 template<class TagStore>
 void
+Cache<TagStore>::handleRefresh() {
+    DPRINTF(ALT2,"begin dealing with refresh block\n");
+    WrappedBlkVisitor visitor(*this, &Cache<TagStore>::checkRefreshVisitor);
+    tags->forEachBlk(visitor);
+    // schedule for next refresh operation
+    DPRINTF(ALT2,"reschedule the refresh event, next current time %ld, assigned schedule time %ld\n",clockEdge(),clockEdge()+refreshPeriod);
+    reschedule(handleRefreshEvent, std::max((clockEdge()+refreshPeriod),clockEdge()),true);
+}
+
+template<class TagStore>
+void
+Cache<TagStore>::predBlkSize() {
+    DPRINTF(ALT0, "current Tick %ld\n",curTick());
+    unsigned temp_blk_size = eDRAMblkSize;
+    int temp_index = (int)(log(double(temp_blk_size/64)) / log(2));
+    int temp_max_hit = online_monitor[temp_index]->getLscore();
+    for(int i = 0; i < 4; i++) {
+        online_monitor[i]->printLscore();
+        //pred the blk Size we should use
+        if(online_monitor[i]->getLscore() > temp_max_hit) {
+            temp_max_hit = online_monitor[i]->getLscore();
+            temp_blk_size = 64 * ((int)(pow(2,i)));
+        }
+        //After get the information, reset the Lscore
+        eDRAMblkSize = temp_blk_size;
+        DPRINTF(ALT0,"curret eDRAM size %d\n",eDRAMblkSize);
+        online_monitor[i]->resetLscore();
+    }
+    
+    //reset the eDRAMblkSize
+    eDRAMblkSize = temp_blk_size;
+    reschedule(predBlkSizeEvent, clockEdge() + 100000000, true);
+}
+
+template<class TagStore>
+void
 Cache<TagStore>::setExpired(Tick expired_, BlkType *blk_, Addr addr_) {
     blk_->setExpiredTime(expired_);
     DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",addr_,blk_->expired_count);
@@ -1658,6 +1969,90 @@ Cache<TagStore>::setExpired(Tick expired_, BlkType *blk_, Addr addr_) {
 	PendingExpiredQueue.push_back(blk_->expired_count);
     }
 }
+
+template<class TagStore>
+void
+Cache<TagStore>::setRefresh() {
+    if(init_refresh == 0) {
+        DPRINTF(ALT2,"Try schedule refresh operation");
+        schedule(handleRefreshEvent, clockEdge() + refreshPeriod);
+        init_refresh = 1;
+    }
+    else {}
+}
+
+template<class TagStore>
+bool
+Cache<TagStore>::checkRefreshVisitor(BlkType &blk) {
+    PacketList writebacks;
+    Tick time = clockEdge(hitLatency);
+    Addr repl_addr = tags->regenerateBlkAddr(blk.tag, blk.set);
+    //Qi: if the blk is predicted as dead we do not refresh it, we ignore the expire count in alt2
+    //Qi: since the refresh operations are periodical autimatically
+    //Qi: So what we do here is updating pred_stat and accumulate to reach TIME
+    if(blk.isValid()) {
+        assert(!blk.disabled);
+        int indicator_stat = tags->getIndicatorStat(repl_addr);
+        //Qi: if the indicator turn off the dead line predictor, return directly
+        if(indicator_stat == 6) {
+            DPRINTF(ALT2,"turn off prediction for block addr %x\n",repl_addr);
+            blk.TIME = 0;
+            return true;
+        }
+        blk.TIME++;
+        assert(blk.pred_stat != 2);
+        //Qi: first check if it is in S1 state, if yes, it means now the blk expired, we need to do something
+        DPRINTF(ALT2,"current pred stat for blk addr %x is %d\n",repl_addr, blk.pred_stat);
+        if(blk.pred_stat == 1) {
+            if(mshrQueue.findMatch(repl_addr)) {
+                return true;
+            }
+            else {
+                if(blk.isDirty()) {
+                    DPRINTF(ALT2,"addr %x is dirty ,write back then expire\n",repl_addr);
+	            allocateWriteBuffer(writebackBlk(&blk),time,true);
+                }
+                else {
+                    DPRINTF(SttCache,"addr %x is clean, expire normally\n",repl_addr);
+                }
+                tags->invalidate(&blk); 
+                blk.invalidate(); 
+                blk.pred_stat = 2; 
+                blk.disabled = true;
+                return true;
+            }
+        }
+        //Qi: Time elapsed, we could do something to update the pred stat.
+        else if(blk.TIME == 256) {
+            if(blk.pred_stat == 0) {
+                switch(indicator_stat) {
+                    case 0:    blk.pred_stat = 1;  break;
+                    case 1:    blk.pred_stat = 3;  break;
+                    case 2:    blk.pred_stat = 4;  break;
+                    case 3:    blk.pred_stat = 5;  break;
+                    case 4:    blk.pred_stat = 6;  break;
+                    case 5:    blk.pred_stat = 7;  break;
+                    default:   assert(0);  break;
+                }
+            }
+            else {
+                switch(blk.pred_stat) {
+                    case 3:    blk.pred_stat = 1;  break;
+                    case 4:    blk.pred_stat = 3;  break;
+                    case 5:    blk.pred_stat = 4;  break;
+                    case 6:    blk.pred_stat = 5;  break;
+                    case 7:    blk.pred_stat = 6;  break;
+                    default:   assert(0);  break;
+                }
+            }
+            DPRINTF(ALT2,"after update the pred stat for blk addr %x is %d\n",repl_addr, blk.pred_stat);
+            return true;
+        }
+    }
+
+    return true;
+}
+
 
 template<class TagStore>
 bool
@@ -1744,7 +2139,8 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
         // better have read new data...
         assert(pkt->hasData());
         // need to do a replacement
-        blk = allocateBlock(addr, writebacks);
+        int pkt_op = pkt->isWrite() ? 1 : 0;
+        blk = allocateBlock(addr, writebacks, pkt_op);
         if (blk == NULL) {
             // No replaceable block... just use temporary storage to
             // complete the current request and then get rid of it
@@ -1767,6 +2163,9 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
 		        DPRINTF(ExpiredBlock,"wait for reschedule,push tick %ld\n",blk->expired_count);
 			PendingExpiredQueue.push_back(blk->expired_count);
 		    }*/
+                }
+                if(isLLC && alt_mech == 2) {
+                    setRefresh();
                 }
 		if(dead_on_arrival != 0)
 			num_dead_on_arrival++;
@@ -1813,9 +2212,21 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
     if (pkt->isRead()) {
         std::memcpy(blk->data, pkt->getPtr<uint8_t>(), blkSize);
     }
+    if(alt_mech == 1) {
+        if(blk->isSram) {
+            blk->whenReady = clockEdge() + sram_readLatency * clockPeriod() 
+                + sram_writeLatency * clockPeriod() + pkt->busLastWordDelay;
+        }
+        else {
+            blk->whenReady = clockEdge() + responseLatency * clockPeriod() +
+                writeLatency * clockPeriod() + pkt->busLastWordDelay;
 
-    blk->whenReady = clockEdge() + responseLatency * clockPeriod() +
-        writeLatency * clockPeriod() + pkt->busLastWordDelay;
+        }
+    }
+    else {
+        blk->whenReady = clockEdge() + responseLatency * clockPeriod() +
+            writeLatency * clockPeriod() + pkt->busLastWordDelay;
+    }
 
     return blk;
 }

@@ -247,7 +247,7 @@ class BaseCache : public MemObject
     const unsigned blkSize;
 
     /** Block size of eDRAM bank in this cache */
-    const unsigned eDRAMblkSize;
+    unsigned eDRAMblkSize;
 
     /**
      * The latency of a hit in this device.
@@ -267,6 +267,16 @@ class BaseCache : public MemObject
      * The latency of a read in stt ram bank
      */
     const Cycles stt_readLatency;
+
+    /**
+     * The latency of a write in sram entry
+     */
+    const Cycles sram_writeLatency;
+
+    /**
+     * The latency of a read in sram entry
+     */
+    const Cycles sram_readLatency;
 
     /**
      * The latency of sending reponse to its upper level cache/core on a
@@ -297,16 +307,44 @@ class BaseCache : public MemObject
      */
     bool isLLC;
 
+    /** Param indicating K value determining if we transfer from sram to stt
+     *  for alt mech1 only
+     */
+    int K_value;
+
     /** Param indicating whether we are in collecting locality mode
      */
     bool localityMode;
+
+    /** Param used to test time stamp accuracy
+     */
+    bool testTimeStampMode;
 
     /** Param indicating if large cache line size is enabled
      */
     bool largeBlockEnabled;
 
+    /** Param indicating whether we use alternative mechanism for comparison
+     *  0 for no alt mech, 1 for write non-uniformity (sram/stt ram), 2 for
+     *  dead line prediction & refresh (edram), 3 for dead line prediction
+     *  (stt ram)
+     */
+    int alt_mech;
+
     /** The expire time of edram*/
     const int expiredPeriod;
+
+    /** The refresh time of edram*/
+    const int refreshPeriod;
+ 
+    /** Initiated as 0, used to initiate the first refresh operation
+     *  The following refresh operations will be automatic
+     */
+    int init_refresh;
+
+    /** Initiated as 0, used to initiate first print Lscore
+     */
+    int init_Lscore;
 
     /**
      * Bit vector of the blocking reasons for the access path.

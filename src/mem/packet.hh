@@ -292,6 +292,9 @@ class Packet : public Printable
     /// The original addr, which is not aligned, just for locality
     Addr ori_addr;
 
+    // Qi: the last access addr, just for alt3
+    Addr LA;
+
     //Used for prefetch packet, indicate for which addr the prefetches are for.
     //only set for prefetch insts
     Addr baseAddr;
@@ -564,6 +567,8 @@ class Packet : public Printable
 
     Addr getAddr() const { assert(flags.isSet(VALID_ADDR)); return addr; }
     Addr getOriAddr() const { assert(flags.isSet(VALID_ADDR)); return ori_addr; }
+    //Qi: currently not sure, but I think it should be the ori_addr
+    Addr getLA() { assert(flags.isSet(VALID_ADDR)); return ori_addr; }
     Addr getBaseAddr() const { assert(flags.isSet(VALID_ADDR)); return baseAddr;}
     /**
      * Update the address of this packet mid-transaction. This is used

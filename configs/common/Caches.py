@@ -85,16 +85,24 @@ class L3Cache(BaseCache):
     response_latency = 12
     #mshrs = 20
     mshrs = 80
-    is_bottom_level = False
+    is_bottom_level = True
     is_LLC = False
+    alternative_mech = 0
+    K_value = 8;
+    sram_assoc = 4
+    sram_per_set = 2
     locality_Mode = False
-    large_block_enabled = False
-    eDRAM_cache_line_size = 512
+    testTimeStamp_Mode = False
+    large_block_enabled = True
+    eDRAM_cache_line_size = 64
     expired_period = 20000000
+    refresh_period = 20000000
     tgts_per_mshr = 12
     write_buffers = 8
     stt_read_latency = 10
     stt_write_latency = 40
+    sram_read_latency = 12
+    sram_write_latency = 12
 
 class IOCache(BaseCache):
     assoc = 8

@@ -62,6 +62,11 @@ class LRU(BaseTags):
     cxx_header = "mem/cache/tags/lru.hh"
     assoc = Param.Int(Parent.assoc, "associativity")
     size = Param.MemorySize(Parent.size, "capacity in bytes")
+    sram_assoc = Param.Int(Parent.sram_assoc,"sram associativity, only used in ALT1 mechanism")
+    sram_per_set = Param.Int(Parent.sram_per_set,"sram per set, only used in ALT1 mechanism")
+    alternative_mech = Param.Int(Parent.alternative_mech,"alternative mechanisim, sttram+sram/edram")
+    sram_read_latency = Param.Cycles(Parent.sram_read_latency,"sram entry read latency")
+    sram_write_latency = Param.Cycles(Parent.sram_write_latency,"sram entry write latency")
 
 class LRUSTT(BaseTags):
     type = 'LRUSTT'

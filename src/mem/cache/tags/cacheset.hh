@@ -62,6 +62,9 @@ class CacheSet
     /** The associativity of this set. */
     int assoc;
 
+    /** The prediction indicator state. */
+    int indicator_stat;
+
     /** Cache blocks in this set, maintained in LRU order 0 = MRU. */
     Blktype **blks;
 
@@ -73,6 +76,17 @@ class CacheSet
      */
     Blktype* findBlk(Addr tag, int& way_id) const ;
     Blktype* findBlk(Addr tag) const ;
+    /**
+     * Qi: for ALT1, find a block matching the tag in semi sram set
+     * pay attention to check the OID to see if they match
+     */
+    Blktype* findSramBlk(Addr _tag, int _set) const;
+    int findBlkPos(Addr tag, int set);
+
+    /**
+     * Find if there are tag hit in the set, regardless if that is valid or not
+     */
+    Blktype* findTag(Addr tag, int set = -1, bool sram = false) const;
 
     /**
      * Move the given block to the head of the list.
@@ -86,6 +100,21 @@ class CacheSet
      */
     void moveToTail(Blktype *blk);
 
+    /**
+     * Qi: only used for alt mech1, move the given block to specified position.
+     * @param blk The block to move. pos_id The position to move.
+     */
+    void moveToPos(Blktype *blk, int pos_id);
+
+    /**
+     * Qi: return the indicator stat, only used in ALT2
+     */
+    int getIndicatorStat() {return indicator_stat;}
+  
+    /**
+     * Qi: update the indicator stat, only used in ALT2
+     */
+    int updateIndicatorStat(Addr tag, bool &result);
 };
 
 template <class Blktype>
@@ -98,9 +127,51 @@ CacheSet<Blktype>::findBlk(Addr tag, int& way_id) const
      */
     way_id = assoc;
     for (int i = 0; i < assoc; ++i) {
-        if (blks[i]->tag == tag && blks[i]->isValid()) {
+        if (blks[i]->tag == tag && blks[i]->isValid() && !(blks[i]->isSram)) {
             way_id = i;
             return blks[i];
+        }
+    }
+    return NULL;
+}
+
+template <class Blktype>
+Blktype*
+CacheSet<Blktype>::findSramBlk(Addr _tag, int _set) const
+{
+    for (int i = 0; i < assoc; ++i) {
+        if(blks[i]->isSram && blks[i]->tag == _tag && blks[i]->isValid() && blks[i]->OID == _set) {
+            return blks[i];
+        }
+    }
+    return NULL;
+}
+
+template <class Blktype>
+int
+CacheSet<Blktype>::findBlkPos(Addr _tag, int _set) {
+    for (int i = 0; i < assoc; ++i) {
+        if(blks[i]->tag == _tag && blks[i]->isValid() && blks[i]->isSram && blks[i]->OID == _set) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+template <class Blktype>
+Blktype*
+CacheSet<Blktype>::findTag(Addr tag, int set, bool sram) const {
+    for (int i = 0; i < assoc; ++i) {
+        if(blks[i]->tag == tag) {
+            if(sram) {
+                if(blks[i]->OID == set) {
+                    assert(blks[i]->isSram);
+                    return blks[i];
+                }
+            }
+            else {
+                return blks[i];
+            }
         }
     }
     return NULL;
@@ -112,6 +183,36 @@ CacheSet<Blktype>::findBlk(Addr tag) const
 {
     int ignored_way_id;
     return findBlk(tag, ignored_way_id);
+}
+
+template <class Blktype>
+int
+CacheSet<Blktype>::updateIndicatorStat(Addr tag, bool &result) {
+    if(indicator_stat != 6) {
+        bool prediction_result = true;
+        for(int i = 0; i < assoc; i++) {
+            if(blks[i]->tag == tag && blks[i]->disabled) {
+                assert(!blks[i]->isValid());
+                prediction_result = false;
+                break;
+            }
+        }
+        result = prediction_result;
+        //Qi: predict correct, update the stat
+        if(prediction_result) {
+            if(indicator_stat != 0) {
+                indicator_stat--;
+            }
+        }
+        //Qi: predict wrong, update the stat
+        else {
+            indicator_stat++;
+        }
+        return indicator_stat;
+    }
+    else {
+        return 6;
+    }
 }
 
 template <class Blktype>
@@ -163,5 +264,32 @@ CacheSet<Blktype>::moveToTail(Blktype *blk)
         --i;
     } while (next != blk);
 }
+
+template <class Blktype>
+void
+CacheSet<Blktype>::moveToPos(Blktype *blk, int pos_id)
+{
+    // nothing to do if blk is already in the postion
+    if (blks[pos_id] == blk)
+        return;
+
+    // write 'next' block into blks[i], moving up from MRU toward LRU
+    // until we overwrite the block we moved to head.
+
+    // start by setting up to write 'blk' into blks[0]
+    int i = pos_id;
+    Blktype *next = blk;
+
+    do {
+        assert(i >= 0);
+        // swap blks[i] and next
+        Blktype *tmp = blks[i];
+        blks[i] = next;
+        next = tmp;
+        --i;
+    } while (next != blk);
+}
+
+
 
 #endif

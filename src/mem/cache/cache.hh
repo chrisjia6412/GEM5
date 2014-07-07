@@ -59,6 +59,8 @@
 #include "mem/cache/mshr.hh"
 #include "mem/cache/tags/lrustt.hh"
 #include "sim/eventq.hh"
+#include "mem/cache/sampler.cc"
+#include "mem/cache/monitor.cc"
 #include "debug/CheckAddr.hh"
 
 //Forward decleration
@@ -182,14 +184,20 @@ class Cache : public BaseCache
     /** Tag and data Storage */
     TagStore *tags;
 
-    /** Tag and data Storage 2*/
+    /** Tag and data Storage 2 */
     //TagStore *tags2;
 
-    /** Tag and data Storage in STT RAM*/
+    /** Tag and data Storage in STT RAM */
     LRUSTT *stt_tags;
 
     /** Prefetcher */
     BasePrefetcher *prefetcher;
+
+    /** online predictor/sampler */
+    sampler *online_sampler;
+
+    /** monitor(ADT + Lscore) */
+    monitor **online_monitor;
 
     /** Temporary cache block for occasional transitory use */
     BlkType *tempBlock;
@@ -237,8 +245,10 @@ class Cache : public BaseCache
      * the block is not currently in the cache.  Append writebacks if
      * any to provided packet list.  Return free block frame.  May
      * return NULL if there are no replaceable blocks at the moment.
+     * Qi: for alt mech1 if LLC, should allocate SRAM/STTRAM based 
+     * on it is WRITE/READ miss. @param op: 0 for read, 1 for write.
      */
-    BlkType *allocateBlock(Addr addr, PacketList &writebacks);
+    BlkType *allocateBlock(Addr addr, PacketList &writebacks, int _op = 0);
 
     /**
      * Find a block frame for new block at address addr, assuming that
@@ -249,6 +259,12 @@ class Cache : public BaseCache
     /** Handle the block transfer between the stt ram and edram
      */
     void handleTransferBetweenTags(Addr addr, PacketList &writebacks, BlkType *_blk);
+
+    /** Handle the block transfer from sram to stt ram, for alt mech1*/
+    void pushToSram(BlkType *_blk, PacketList &writebacks);
+
+    /** Handle the block transfer from stt ram to sram, for alt mech1*/
+    void pushToSttRam(BlkType *_blk, PacketList &writebacks);
 
     /**
      * Populates a cache block and handles all outstanding requests for the
@@ -456,9 +472,15 @@ class Cache : public BaseCache
   
   private:
     void handleExpired();
+    void handleRefresh();
+    void predBlkSize();
     EventWrapper<Cache, &Cache::handleExpired> handleExpiredEvent;
+    EventWrapper<Cache, &Cache::handleRefresh> handleRefreshEvent;
+    EventWrapper<Cache, &Cache::predBlkSize> predBlkSizeEvent;
     bool checkExpiredVisitor(BlkType &blk);
+    bool checkRefreshVisitor(BlkType &blk);
     void setExpired(Tick expired_, BlkType *blk_, Addr addr_);
+    void setRefresh();
     void prefetchLargeBlk(Addr ori_addr, PacketPtr pkt, Tick time);
 };
 

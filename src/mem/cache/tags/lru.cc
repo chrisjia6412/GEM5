@@ -53,6 +53,8 @@
 #include "debug/CacheRepl.hh"
 #include "debug/DeadStat.hh"
 #include "debug/TestTags.hh"
+#include "debug/ALT1.hh"
+#include "debug/ALT2.hh"
 #include "mem/cache/tags/lru.hh"
 #include "mem/cache/base.hh"
 #include "sim/core.hh"
@@ -61,10 +63,19 @@ using namespace std;
 
 LRU::LRU(const Params *p)
     :BaseTags(p), assoc(p->assoc),
-     numSets(p->size / (p->block_size * p->assoc))
+     numSets(p->size / (p->block_size * p->assoc)),
+     sram_assoc(p->sram_assoc),
+     sram_per_set(p->sram_per_set),
+     numSramSets(numSets * sram_per_set / sram_assoc),
+     sram_readLatency(p->sram_read_latency),
+     sram_writeLatency(p->sram_write_latency),
+     alt_mech(p->alternative_mech)
 {
 
     DPRINTF(TestTags,"LRU,create tags here, assoc %d, size %ld\n",assoc,p->size);
+    if(alt_mech != 0) {
+        DPRINTF(TestTags,"ALT %d, sram assoc %d, sram entry per set %d, # of sram sets %d\n", alt_mech, sram_assoc, sram_per_set, numSramSets);
+    }
     //printf("LRU, create tags here, assoc %d, size %ld\n",assoc,p->size);
     // Check parameters
     if (blkSize < 4 || !isPowerOf2(blkSize)) {
@@ -91,6 +102,10 @@ LRU::LRU(const Params *p)
     warmupBound = numSets * assoc;
 
     sets = new SetType[numSets];
+    // Qi: in alt mech 1, assign a new semi sram sets
+    if(alt_mech == 1) {
+        semiSramSets = new SetType[numSramSets];
+    }
     blks = new BlkType[numSets * assoc];
     // allocate data storage in one big chunk
     numBlocks = numSets * assoc;
@@ -99,7 +114,7 @@ LRU::LRU(const Params *p)
     unsigned blkIndex = 0;       // index into blks array
     for (unsigned i = 0; i < numSets; ++i) {
         sets[i].assoc = assoc;
-
+        sets[i].indicator_stat = 0;
         sets[i].blks = new BlkType*[assoc];
 
         // link in the data blocks
@@ -120,10 +135,38 @@ LRU::LRU(const Params *p)
             blk->whenReady = 0;
             blk->isTouched = false;
             blk->size = blkSize;
+            //Qi: set SC and OID information
+            blk->SC = 0;
+            blk->OID = -1;
+            if(j >= (assoc-sram_per_set) && alt_mech == 1) {
+                blk->isSram = true;
+            }
             sets[i].blks[j]=blk;
             blk->set = i;
         }
     }
+    // Qi: only used for alt1 mech, set up a new semi sram cache set
+    if(alt_mech == 1) {
+        for (unsigned i = 0; i < numSramSets; ++i) {
+            semiSramSets[i].assoc = sram_assoc;
+            semiSramSets[i].blks = new BlkType*[sram_assoc];
+        }
+        unsigned current_way = 0;
+        for (unsigned i = 0; i < numSets; ++i) {
+            if(i != 0 && i % numSramSets == 0) {
+                current_way += sram_per_set;
+            }
+            unsigned sram_set_id = i % numSramSets; 
+            unsigned temp_way = current_way;
+            for (unsigned j = 0; j < assoc; ++j) {
+                if(sets[i].blks[j]->isSram == true) {
+                    semiSramSets[sram_set_id].blks[temp_way] = sets[i].blks[j];
+                    semiSramSets[sram_set_id].blks[temp_way]->LRUs = temp_way;
+                    temp_way++;    
+                }
+            }
+        } 
+    } 
 }
 
 LRU::~LRU()
@@ -134,15 +177,18 @@ LRU::~LRU()
 }
 
 LRU::BlkType*
-LRU::accessBlock(Addr addr, Cycles &lat, int master_id)
+LRU::accessBlock(Addr addr, Cycles &lat, int master_id, int op_type)
 {
     Addr tag = extractTag(addr);
     unsigned set = extractSet(addr);
+    unsigned semiSramSet = set % numSramSets;
     BlkType *blk = sets[set].findBlk(tag);
     //lat = hitLatency;
+    
     if (blk != NULL) {
         // move this block to head of the MRU list
         sets[set].moveToHead(blk);
+
         DPRINTF(CacheRepl, "set %x: moving blk %x to MRU\n",
                 set, regenerateBlkAddr(tag, set));
         if (blk->whenReady > curTick()
@@ -150,6 +196,41 @@ LRU::accessBlock(Addr addr, Cycles &lat, int master_id)
             lat = cache->ticksToCycles(blk->whenReady - curTick());
         }
         blk->refCount += 1;
+        // Qi: for ALT2, if the blk is accessed, return to S0 stat
+        if(alt_mech == 2) {
+            assert(blk->pred_stat != 2);
+            blk->pred_stat = 0;
+        }
+    }
+    // Qi: for ALT1, miss in stt ram sets, try finding in sram sets
+    else if(alt_mech == 1) {
+        blk = semiSramSets[semiSramSet].findSramBlk(tag,set);
+        if(blk != NULL) {
+            semiSramSets[semiSramSet].moveToHead(blk);
+            // Qi: if hit in sram set, als
+            BlkType *stt_blk = sets[blk->set].findTag(blk->tag, blk->OID, true);
+            assert(stt_blk && stt_blk->isValid());
+            sets[blk->set].moveToHead(stt_blk);
+            DPRINTF(CacheRepl,"hit in semi Sram set %x, actual stt set %x, OID %x: moving blk %x to MRU\n",semiSramSet,blk->set,blk->OID,addr);
+            if(op_type == 0) {
+                lat = sram_readLatency;
+            }
+            else {
+                lat = sram_writeLatency;
+            }
+            if (blk->whenReady > curTick()
+                && cache->ticksToCycles(blk->whenReady - curTick()) > lat) {
+                lat = cache->ticksToCycles(blk->whenReady - curTick());
+            } 
+            blk->refCount += 1;
+        }
+    }
+    //Qi: for ALT2, if miss let see if it is due to wrong prediction
+    else if(alt_mech == 2) {
+        bool prediction_result = false;
+        int current_stat = 0;
+        current_stat = sets[set].updateIndicatorStat(tag, prediction_result);
+        DPRINTF(ALT2,"current indicator stat %d, prediction result %d\n",current_stat, prediction_result);
     }
 
     return blk;
@@ -197,6 +278,9 @@ LRU::findBlock(Addr addr) const
     Addr tag = extractTag(addr);
     unsigned set = extractSet(addr);
     BlkType *blk = sets[set].findBlk(tag);
+    if(blk == NULL && alt_mech == 1) {
+        blk = semiSramSets[set % numSramSets].findSramBlk(tag,set);
+    } 
     return blk;
 }
 
@@ -204,14 +288,103 @@ LRU::BlkType*
 LRU::findVictim(Addr addr, PacketList &writebacks)
 {
     unsigned set = extractSet(addr);
+    int i = 0;
     // grab a replacement candidate
     BlkType *blk = sets[set].blks[assoc-1];
-
+    if(addr == 0x92900) {
+        DPRINTF(CacheRepl, "show me corresponding set entry\n");
+        while (i < assoc) {
+            BlkType *temp_blk = sets[set].blks[i];
+            assert(temp_blk);
+            DPRINTF(ALT1,"blk %d, OID %d, set %x, blk tag %x, Valid %d\n",i,temp_blk->OID,set,temp_blk->tag,temp_blk->isValid());    
+            i++; 
+        }
+    }
     if (blk->isValid()) {
         DPRINTF(CacheRepl, "set %x: selecting blk %x for replacement\n",
                 set, regenerateBlkAddr(blk->tag, set));
     }
     return blk;
+}
+
+void 
+LRU::printSet(Addr addr) {
+    int i = 0;
+    unsigned set = extractSet(addr);
+    while (i < assoc) {
+        BlkType *temp_blk = sets[set].blks[i];
+        assert(temp_blk);
+        DPRINTF(ALT2,"after handle fill blk %d, OID %d, set %x, blk tag %x, Valid %d, isSram %d, blk value %d\n",i,temp_blk->OID,set,temp_blk->tag,temp_blk->isValid(),temp_blk->isSram,temp_blk);    
+            i++; 
+    }
+}
+
+int
+LRU::getIndicatorStat(Addr addr) {
+    unsigned set = extractSet(addr);
+    int indicator_stat = sets[set].getIndicatorStat();
+    return indicator_stat;
+}
+
+LRU::BlkType*
+LRU::findSttRamVictim(Addr addr)
+{
+    unsigned set = extractSet(addr);
+    // grab a replacement candidate
+    unsigned temp_assoc = assoc;
+    BlkType *blk = sets[set].blks[temp_assoc-1];
+    while(blk->isSram) {
+        assert(temp_assoc >= 0);
+        temp_assoc--;
+        blk = sets[set].blks[temp_assoc-1];
+    }
+    assert(blk);
+    DPRINTF(ALT1,"STT RAM set %x, blk set %x, blk tag %x , isSram %d as victim\n",set,blk->set,blk->tag,blk->isSram);
+    if (blk->isValid()) {
+        DPRINTF(CacheRepl, "Stt Ram set %x: selecting blk %x for replacement\n", set, regenerateBlkAddr(blk->tag, set));
+    }
+    return blk;
+}
+
+LRU::BlkType*
+LRU::findSramVictim(Addr addr)
+{
+    unsigned set = SramExtractSet(addr);
+    unsigned i = 0;
+    // grab a replacement candidate
+    BlkType *blk = semiSramSets[set].blks[sram_assoc-1];
+    assert(blk);
+    DPRINTF(ALT1,"SRAM set %x, blk set %x, blk tag %x, isSram %d as victim\n",set,blk->set,blk->tag,blk->isSram);
+    DPRINTF(ALT1,"show corresponding STT RAM entry\n");
+    while (i < assoc) {
+        BlkType *stt_blk = sets[blk->set].blks[i];
+        assert(stt_blk);
+        DPRINTF(ALT1,"blk %d, OID %x, set %x, blk set %x, blk tag %x, isSram %d as victim\n",i,blk->OID,set,stt_blk->set,stt_blk->tag,stt_blk->isSram);    
+        i++; 
+    }
+    if (blk->isValid()) {
+        DPRINTF(CacheRepl, "Sramset %x: selecting blk %x for replacement\n", set, regenerateBlkAddr(blk->tag,blk->OID));
+    }
+    return blk;
+}
+
+int
+LRU::getBlkPos(BlkType *blk) {
+    assert(blk->isSram);
+    assert(blk->isValid());
+    int way_id = 0;
+    way_id = sets[blk->set].findBlkPos(blk->tag,blk->OID);
+    assert(way_id >= 0);
+    return way_id;
+}
+
+void
+LRU::moveToPos(BlkType *blk, int pos) {
+    assert(!blk->isSram);
+    DPRINTF(ALT2,"set %d, tag %x, valid %d, blk value %d\n",blk->set,blk->tag,blk->isValid(),blk);
+    printSet(regenerateBlkAddr(blk->tag, blk->set));    
+    //DPRINTF(ALT2,"The current blk pos %d\n",getBlkPos(blk));
+    sets[blk->set].moveToPos(blk,pos);
 }
 
 void
@@ -267,17 +440,28 @@ LRU::insertBlock(PacketPtr pkt, BlkType *blk, int &num_dead_on_arrival_, int &nu
     blk->reUsed = false;
     //Reset the transferrable bit
     blk->transferrable = true;
+    //Reset the SC bit
+    blk->SC = 0;
+    //Reset last write
+    blk->lastWrite = false;
+    //if Sram entry set OID
+    if(blk->isSram) {
+        blk->OID = extractSet(addr);
+    }
+    //Reset pred stat and disable bit
+    blk->pred_stat = 0;
+    blk->disabled = false;
 
-	//Qi:set the source of the block
-	DPRINTF(DeadStat,"pkt mem cmd %s\n",pkt->cmd.toString());
-	if(pkt->cmd == MemCmd::ReadReq || pkt->cmd == MemCmd::WriteReq
-	  || pkt->cmd == MemCmd::ReadResp || pkt->cmd == MemCmd::WriteResp
-	  || pkt->cmd == MemCmd::ReadExReq || pkt->cmd == MemCmd::ReadExResp)
-		blk->blkSource = BlockFill;
-	else if(pkt->cmd == MemCmd::Writeback)
-		blk->blkSource = WriteBack;
-	else
-		blk->blkSource = 2;
+    //Qi:set the source of the block
+    DPRINTF(DeadStat,"pkt mem cmd %s\n",pkt->cmd.toString());
+    if(pkt->cmd == MemCmd::ReadReq || pkt->cmd == MemCmd::WriteReq
+        || pkt->cmd == MemCmd::ReadResp || pkt->cmd == MemCmd::WriteResp
+	|| pkt->cmd == MemCmd::ReadExReq || pkt->cmd == MemCmd::ReadExResp)
+        blk->blkSource = BlockFill;
+    else if(pkt->cmd == MemCmd::Writeback)
+        blk->blkSource = WriteBack;
+    else
+        blk->blkSource = 2;
 
     // deal with what we are bringing in
     assert(master_id < cache->system->maxMasters());
@@ -285,8 +469,90 @@ LRU::insertBlock(PacketPtr pkt, BlkType *blk, int &num_dead_on_arrival_, int &nu
     blk->srcMasterId = master_id;
 
     unsigned set = extractSet(addr);
-    sets[set].moveToHead(blk);
+    unsigned semiSramSet = set % numSramSets;
+    //sets[set].moveToHead(blk); 
+    if(alt_mech == 1) {
+        if(blk->isSram == false) {
+            sets[set].moveToHead(blk);
+        }
+        else {
+            assert(semiSramSet == blk->set % numSramSets);
+            BlkType *stt_blk = sets[blk->set].findTag(blk->tag,blk->OID,true);
+            assert(stt_blk);
+            sets[blk->set].moveToHead(stt_blk);
+            semiSramSets[blk->set % numSramSets].moveToHead(blk);
+        }
+    }
+    else {
+        sets[set].moveToHead(blk);
+    }
 }
+
+void
+LRU::insertBlockNoPkt(Addr addr, BlkType *blk)
+{
+ 
+    if (!blk->isTouched) {
+        tagsInUse++;
+        blk->isTouched = true;
+        if (!warmedUp && tagsInUse.value() >= warmupBound) {
+            warmedUp = true;
+            warmupCycle = curTick();
+        }
+    }
+
+    // If we're replacing a block that was previously valid update
+    // stats for it. This can't be done in findBlock() because a
+    // found block might not actually be replaced there if the
+    // coherence protocol says it can't be.
+    if (blk->isValid()) {
+        replacements[0]++;
+        totalRefs += blk->refCount;
+        ++sampledRefs;
+        blk->refCount = 0;
+
+        // deal with evicted block
+        assert(blk->srcMasterId < cache->system->maxMasters());
+        occupancies[blk->srcMasterId]--;
+
+        blk->invalidate();
+    }
+
+    blk->isTouched = true;
+    // Set tag for new block.  Caller is responsible for setting status.
+    blk->tag = extractTag(addr);
+    // Qi: if sram entry, set OID
+    if(blk->isSram) {
+        blk->OID = extractSet(addr);
+    }
+    blk->pred_stat = 0;
+    blk->disabled = false;
+
+    // deal with what we are bringing in
+    //assert(master_id < cache->system->maxMasters());
+    //occupancies[master_id]++;
+    //blk->srcMasterId = master_id;
+
+    unsigned set = extractSet(addr);
+    unsigned sram_set = SramExtractSet(addr);
+    //sets[set].moveToHead(blk);
+    if(alt_mech == 1) {
+        if(blk->isSram == false) {
+            sets[set].moveToHead(blk);
+        }
+        else {
+            assert(sram_set == blk->set % numSramSets);
+            BlkType *stt_blk = sets[blk->set].findTag(blk->tag,blk->OID,true);
+            assert(stt_blk);
+            sets[blk->set].moveToHead(stt_blk);
+            semiSramSets[sram_set].moveToHead(blk);
+        }
+    }
+    else {
+        sets[set].moveToHead(blk);
+    }
+}
+
 
 void
 LRU::invalidate(BlkType *blk)
@@ -306,7 +572,24 @@ LRU::invalidate(BlkType *blk)
 
     // should be evicted before valid blocks
     unsigned set = blk->set;
-    sets[set].moveToTail(blk);
+    unsigned sram_set = set % numSramSets;
+    if(alt_mech == 1) {
+        if(blk->isSram == false) {
+            sets[set].moveToTail(blk);
+        }
+        else {
+            assert(sram_set == blk->set % numSramSets);
+            BlkType *stt_blk = sets[blk->set].findSramBlk(blk->tag,blk->OID);
+            BlkType *sram_blk = semiSramSets[sram_set].findSramBlk(blk->tag,blk->OID);
+            assert(stt_blk && stt_blk->isSram);
+            assert(sram_blk && sram_blk->isSram);
+            sets[blk->set].moveToTail(stt_blk);
+            semiSramSets[sram_set].moveToHead(sram_blk);
+        }
+    }
+    else {
+        sets[set].moveToTail(blk);
+    }
 }
 
 void

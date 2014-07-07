@@ -50,10 +50,14 @@ class BaseCache(MemObject):
     cxx_header = "mem/cache/base.hh"
     assoc = Param.Int("associativity")
     stt_assoc = Param.Int(1,"stt associativity")
+    sram_assoc = Param.Int(1,"sram assoc, only used for ALT1 mechanism")
+    sram_per_set = Param.Int(1,"sram entry # per set, only used for ALT1")
     hit_latency = Param.Cycles("The hit latency for this cache")
     write_latency = Param.Cycles("The write latency for this cache")
     stt_write_latency = Param.Cycles(0,"Write latency for stt ram tag this cache")
     stt_read_latency = Param.Cycles(0,"Read latency for stt ram tag this cache")
+    sram_read_latency = Param.Cycles(0,"Read latency for sram entry")
+    sram_write_latency = Param.Cycles(0,"Write latency for sram entry")
     response_latency = Param.Cycles(
             "Additional cache latency for the return path to core on a miss");
     max_miss_count = Param.Counter(0,
@@ -68,9 +72,13 @@ class BaseCache(MemObject):
     # is_LLC is the one indicating whether the current level is LLC
     is_bottom_level = Param.Bool(False, "Is this cache bottom level")
     is_LLC = Param.Bool(False, "Is this cache LLC")
+    K_value = Param.Int(0, "guide transfer from sram to stt");
     locality_Mode = Param.Bool(False, "Are we in collecting locality mode");
+    testTimeStamp_Mode = Param.Bool(False, "test time stamp mode");
     large_block_enabled = Param.Bool(False,"If large cache line size enabled")
     expired_period = Param.Int(0,"retention time of edram in ticks")
+    refresh_period = Param.Int(0,"refresh period of edram in ticks, should be a little less than expired peirod")
+    alternative_mech = Param.Int(0,"if we use alt mech for comparison")
     tgts_per_mshr = Param.Int("max number of accesses per MSHR")
     two_queue = Param.Bool(False,
         "whether the lifo should have two queue replacement")
@@ -86,3 +94,4 @@ class BaseCache(MemObject):
     tags = Param.BaseTags(LRU(), "Tag Store for LRU caches")
     #tags2 = Param.BaseTags(LRU(), "Another Tag Store for LRU caches, to increase blk size")
     stt_tags = Param.BaseTags(LRUSTT(), "Tags Store for STT LRU caches")
+    pred_num = Param.Int(65536, "# of entries in prediction table")

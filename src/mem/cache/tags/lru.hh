@@ -81,10 +81,24 @@ class LRU : public BaseTags
     const unsigned assoc;
     /** The number of sets in the cache. */
     const unsigned numSets;
-
+    /** Assoc of semi-independent SRAM cache in the hybrid cache. */
+    const unsigned sram_assoc;
+    /** The nunmber of SRAM entries each set in the hybrid cache. */
+    const unsigned sram_per_set;
+    /** The number of sram sets in the hybrid cache. */
+    const unsigned numSramSets;
+    /** The sram entry read latency*/
+    const Cycles sram_readLatency;
+    /** The sram entry write latency*/
+    const Cycles sram_writeLatency;
+  public:
+    /** Param indicate whether and what alt mech*/
+    unsigned alt_mech;
+  protected:
     /** The cache sets. */
     SetType *sets;
-
+    /** The semi sram cache sets. */
+    SetType *semiSramSets;
     /** The cache blocks. */
     BlkType *blks;
     /** The data blocks, 1 per cache block. */
@@ -148,9 +162,10 @@ public:
      * @param addr The address to find.
      * @param asid The address space ID.
      * @param lat The access latency.
+     * @param op_type indicate the inst is read(0) or write(1)
      * @return Pointer to the cache block if found.
      */
-    BlkType* accessBlock(Addr addr, Cycles &lat, int context_src);
+    BlkType* accessBlock(Addr addr, Cycles &lat, int context_src, int op_type = 0);
 
     /**
      * For edram, in which block size is different from others. Access block and update replacement data.  May not succeed, in which case
@@ -193,13 +208,42 @@ public:
     BlkType* findVictim(Addr addr, PacketList &writebacks);
 
     /**
+     * Qi: only used for ALT1, find victim of STT-RAM
+     */
+    BlkType* findSttRamVictim(Addr addr);
+
+    /**
+     * Qi: only used for ALT1, find victim of SRAM  
+     */
+    BlkType* findSramVictim(Addr addr);
+
+    /**
+     * Qi: only used for ALT1, find the way_id of the block
+     */
+    int getBlkPos(BlkType *blk);
+
+    /**
+     * Qi: only used for ALT1, move the blk to specified pos
+     */
+    void moveToPos(BlkType *blk, int pos);
+
+    /**
+     * Qi: only used for ALT2, get indicator stat of the set
+     */
+    int getIndicatorStat(Addr addr);
+
+    /**
      * Insert the new block into the cache.  For LRU this means inserting into
      * the MRU position of the set.
      * @param pkt Packet holding the address to update
      * @param blk The block to update.
      */
      void insertBlock(PacketPtr pkt, BlkType *blk, int&, int&);
-
+    
+    /** Qi: only used for alt mech1 
+      */
+    void insertBlockNoPkt(Addr addr, BlkType *blk);   
+    void printSet(Addr addr); 
     /**
      * Generate the tag from the given address.
      * @param addr The address to get the tag from.
@@ -218,6 +262,13 @@ public:
     int extractSet(Addr addr) const
     {
         return ((addr >> setShift) & setMask);
+    }
+
+    /**
+     * Qi: only used for ALT1, Calculate the SRAM set index from addr 
+     */
+    int SramExtractSet(Addr addr) const {
+        return (((addr >> setShift) & setMask) % numSramSets);
     }
 
     /**
