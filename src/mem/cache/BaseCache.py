@@ -95,3 +95,4 @@ class BaseCache(MemObject):
     #tags2 = Param.BaseTags(LRU(), "Another Tag Store for LRU caches, to increase blk size")
     stt_tags = Param.BaseTags(LRUSTT(), "Tags Store for STT LRU caches")
     pred_num = Param.Int(65536, "# of entries in prediction table")
+    performance_threshold = Param.Int(0,"the maximum acceptable performance loss");

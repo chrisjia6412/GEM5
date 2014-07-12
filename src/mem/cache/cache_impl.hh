@@ -70,6 +70,7 @@
 #include "debug/ALT1.hh"
 #include "debug/ALT2.hh"
 #include "debug/ALT3.hh"
+#include "debug/TestTrans.hh"
 #include "mem/cache/prefetch/base.hh"
 #include "mem/cache/blk.hh"
 #include "mem/cache/cache.hh"
@@ -393,7 +394,6 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
     }
 
 
-    //Addr align_addr = pkt->getAddr() & ~(Addr(eDRAMblkSize - 1));
     Addr align_addr = eDRAM_blkAlign(pkt->getAddr());
     int num_sub_block = int(eDRAMblkSize / blkSize);
     DPRINTF(Cache,"align addr %x, # sub blocks %d\n",align_addr,num_sub_block);
@@ -420,7 +420,7 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
         blk = stt_tags->accessBlock(pkt->getAddr(), lat, id);
 	if(blk != NULL) {
             blk->setBlkSourceTag(1);
-            DPRINTF(TestData,"%s for addr %x hit in stt cache, data ",pkt->cmdString(),pkt->getAddr());
+            DPRINTF(TestData,"%s for addr %x hit in stt cache\n",pkt->cmdString(),pkt->getAddr());
             for(int i = 0; i < blkSize; i++) {
                 DPRINTF(TestData,"%x",(unsigned int)*(blk->data+i));
                 if(i == blkSize - 1)
@@ -456,20 +456,6 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
 
     if (blk != NULL) {
 
-        /*if(isBottomLevel && blk->sourceTag == 0 && result) {
-            //blk->setExpiredTime(clockEdge()+expiredPeriod);
-            DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",pkt->getAddr(),blk->expired_count);
-
- 	    if(!handleExpiredEvent.scheduled())
-		schedule(handleExpiredEvent,blk->expired_count);
-	    else {
-		DPRINTF(ExpiredBlock,"wait for reschedule, push tick %ld\n",blk->expired_count);
-		PendingExpiredQueue.push_back(blk->expired_count);
-            }
-        }*/
-
-
-
         if (pkt->needsExclusive() ? blk->isWritable() : blk->isReadable()) {
             // OK to satisfy access
             //Qi: reassign the expire time, collect some stats
@@ -489,17 +475,12 @@ Cache<TagStore>::access(PacketPtr pkt, BlkType *&blk,
             }
             if(isBottomLevel && blk->sourceTag == 0 && (clockEdge()+expiredPeriod)>=blk->expired_count) {
                 setExpired(clockEdge()+expiredPeriod,blk,pkt->getAddr());
-                /*blk->setExpiredTime(clockEdge()+expiredPeriod);
-                DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",pkt->getAddr(),blk->expired_count);
-
- 	        if(!handleExpiredEvent.scheduled())
-		    schedule(handleExpiredEvent,blk->expired_count);
-	        else {
-		    DPRINTF(ExpiredBlock,"wait for reschedule, push tick %ld\n",blk->expired_count);
-		    PendingExpiredQueue.push_back(blk->expired_count);
-                }*/
             }
-            
+            //Qi: update blk firstAccessTick here
+            if(isBottomLevel && blk->firstAccessTick == 0) {
+                blk->firstAccessTick = curTick();
+            }
+
             incHitCount(pkt);
             satisfyCpuSideRequest(pkt, blk);
             //Qi: Hit here, for ALT1 we need to upate some information
@@ -866,6 +847,12 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
     //Qi: Just used to test, it is not useful
     timingInstructions++;
     if (satisfied) {
+        //Qi: if the blk is found from stt_ram, prefetch other sub blocks if
+        //it is the head sub block
+        if(isBottomLevel && blk->sourceTag == 1) {
+            prefetchReusedBlk(blk,pkt,time);
+        }
+
         if (prefetcher && (prefetchOnAccess || (blk && blk->wasPrefetched()))) {
             if (blk)
                 blk->status &= ~BlkHWPrefetched;
@@ -1010,6 +997,155 @@ Cache<TagStore>::recvTimingReq(PacketPtr pkt)
 }
 
 template<class TagStore>
+void 
+Cache<TagStore>::updateTransStat(Addr repl_addr, Addr align_addr, int num_sub_block) {
+    DPRINTF(TestTrans,"addr %x, align addr %x, update transfer stat\n",repl_addr,align_addr);
+    int i = num_sub_block;
+    BlkType *required_blk = tags->findBlock(repl_addr);
+    assert(required_blk->isValid());
+    //Qi: if the sub-block has been checked, return
+    if(required_blk->transferCheck) {
+        DPRINTF(TestTrans,"addr %x has been checked, nothing to do here\n", repl_addr);
+        return;
+    }
+    //Qi: find the earliest accessed sub-block
+    Tick minimum_tick = 0;
+    int target_blk_num = -1;
+    while(i != 0) {
+        Addr temp_addr = align_addr + (i-1)*blkSize;
+        BlkType *blk = tags->findBlock(temp_addr);
+        if(blk == NULL) {
+            blk = stt_tags->findBlock(temp_addr);
+        }
+        if(blk != NULL && blk->reUsed && !blk->transferCheck) {
+            if(minimum_tick == 0) {
+                minimum_tick = blk->firstAccessTick;
+                target_blk_num = i;
+            }
+            else if(blk->firstAccessTick < minimum_tick) {
+                minimum_tick = blk->firstAccessTick;
+                target_blk_num = i;
+            }
+        }
+        i--;
+    }
+    if(target_blk_num == -1) {
+        DPRINTF(TestTrans, "no sub block reused, no one should be stored\n");
+        //Qi: in this condition, reset all sub blocks' bit vector
+        i = num_sub_block;
+        while(i != 0) {
+            Addr temp_addr = align_addr + (i-1)*blkSize;
+            BlkType *blk = tags->findBlock(temp_addr);
+            if(blk == NULL) {
+                blk = stt_tags->findBlock(temp_addr);
+            }
+            if(blk != NULL) {
+                for(int k = 0; k < 8; k++) {
+                    blk->bit_vector[i] = 0;
+                }
+            }
+            i--;
+        }
+        return;
+    }
+    DPRINTF(TestTrans,"earliest accessed addr %x, #%d sub block, accessed tick %ld\n",align_addr+(target_blk_num-1)*blkSize,target_blk_num,minimum_tick);
+    //Qi: find if the earliest one is much earlier than the others
+    //threshold is set 150 cycles (75000000 ticks)
+
+    bool earliest_blk = true;//indicate if we only need to store one sub-block
+    i = num_sub_block;
+    while(i != 0) {
+        Addr temp_addr = align_addr + (i-1)*blkSize;
+        BlkType *blk = tags->findBlock(temp_addr);
+        if(blk == NULL) {
+            blk = stt_tags->findBlock(temp_addr);
+        }
+        if(blk != NULL && blk->reUsed && !blk->transferCheck && i != target_blk_num) {
+            if(blk->firstAccessTick - minimum_tick < 75000000) {
+                earliest_blk = false;
+                break;
+            }
+        }
+        i--;
+    }
+
+    //Qi: if we only need to store one, iterate to set transferCheck and
+    //transferrable of all sub blocks and bit_vector of the head sub block
+    //set to make all sub blocks except the head as non transferrable and
+    //check transfer as true.
+    if(earliest_blk) {
+        DPRINTF(TestTrans,"head sub block exist, only store the head\n");
+        i = num_sub_block;
+        //get the target blk firstly
+        Addr target_addr = align_addr + (target_blk_num-1)*blkSize;
+        BlkType *target_blk = tags->findBlock(target_addr);
+        if(target_blk == NULL) {
+            target_blk = stt_tags->findBlock(target_addr);
+        }
+        assert(target_blk);
+        target_blk->transferrable = true;
+        target_blk->transferCheck = true;
+        target_blk->bit_vector[target_blk_num] = 2;
+        while(i != 0) {
+            Addr temp_addr = align_addr + (i-1)*blkSize;
+            BlkType *blk = tags->findBlock(temp_addr);
+            if(blk == NULL) {
+                blk = stt_tags->findBlock(temp_addr);
+            }
+            if(blk != NULL) {
+                DPRINTF(TestTrans,"check #%d sub block, addr %x,transfer check bit %d, reUsed bit %d, transferrable bit %d, firstAccessTick %x\n",i,temp_addr,blk->transferCheck,blk->reUsed,blk->transferrable,blk->firstAccessTick);
+                //Qi: reset the bit vector of non-head sub block
+                for(int k = 0; k < 8; k++) {
+                    blk->bit_vector[k] = 0;
+                }
+            }
+            if(blk != NULL && i != target_blk_num && !blk->transferCheck) {
+                target_blk->transferrable = false;
+                target_blk->transferCheck = true;
+                if(blk->reUsed) {
+                    DPRINTF(TestTrans,"#%d sub block addr %x reused, set corresponding bit vector\n",i,temp_addr);
+                    target_blk->bit_vector[i] = 1;
+                }
+            }
+            i--;
+        }
+    }
+    //Qi: else disable bit_vector of all sub blocks, set transferCheck
+    // and transferrable bit of all sub blocks
+    else {
+        DPRINTF(TestTrans,"head sub block does not exist\n");
+        i = num_sub_block;
+        while(i != 0) {
+            Addr temp_addr = align_addr + (i-1)*blkSize;
+            BlkType *blk = tags->findBlock(temp_addr);
+            if(blk == NULL) {
+                blk = stt_tags->findBlock(temp_addr);
+            }
+            if(blk != NULL) {
+                DPRINTF(TestTrans,"check #%d sub block, addr %x, transfer check bit %d, reUsed bit %d, transferrable bit %d, firstAccessTick %x\n",i,temp_addr,blk->transferCheck,blk->reUsed,blk->transferrable,blk->firstAccessTick);
+                //Qi: reset the bit vector of non-head sub block
+                for(int k = 0; k < 8; k++) {
+                    blk->bit_vector[k] = 0;
+                }
+            }
+            if(blk != NULL && !blk->transferCheck) {
+                blk->transferCheck = true;
+                if(blk->reUsed) {
+                    DPRINTF(TestTrans,"current sub block addr %x reused, mark transferrable\n",temp_addr);
+                    blk->transferrable = true;
+                }
+                else {
+                    blk->transferrable = false;
+                }
+            }
+            i--;
+        }
+    }
+ 
+}
+
+
+template<class TagStore>
 void
 Cache<TagStore>::prefetchLargeBlk(Addr ori_addr, PacketPtr pkt, Tick time) {
     int num_blk = int(eDRAMblkSize/blkSize);
@@ -1035,6 +1171,62 @@ Cache<TagStore>::prefetchLargeBlk(Addr ori_addr, PacketPtr pkt, Tick time) {
         num_blk--;
     }
 }
+
+
+template<class TagStore>
+void
+Cache<TagStore>::prefetchReusedBlk(BlkType *blk, PacketPtr pkt, Tick time) {
+
+    //Qi: the current sub block is a head sub block, refresh the timestamp
+    //since the head sub block is re-accessed
+    blk->firstAccessTick = curTick();
+    //Qi: reset the transferCheck bit
+    blk->transferCheck = false;
+    //Qi: find the head sub block #
+    int head_sub_block_num = -1;
+    for(int i = 0; i < 8; i++) {
+        if(blk->bit_vector[i] == 2) {
+            head_sub_block_num = i;
+            break;
+        }
+    }
+
+    DPRINTF(TestTrans,"prefetch reused blk, head sub blk num %d\n",head_sub_block_num);
+    //Qi: if no "2" is found, means current blk is not head sub block, return
+    if(head_sub_block_num == -1) {
+        return;
+    }
+    
+    Addr head_addr = tags->regenerateBlkAddr(blk->tag, blk->set);
+    //Qi: if current blk is head sub block, prefetch all the marked sub block
+    for(int i = 0; i < 8; i++) {
+        Addr blk_addr;
+        if(i >= head_sub_block_num) {
+            blk_addr = head_addr + (i - head_sub_block_num) * blkSize;
+        }
+        else {
+            blk_addr = head_addr - (head_sub_block_num - i) * blkSize;
+        }
+        DPRINTF(TestTrans, "#%d sub block, addr %x, reused %d\n",i,blk_addr,blk->bit_vector[i]);
+        if(blk->bit_vector[i] == 1) {
+            if(!tags->findBlock(blk_addr) && !stt_tags->findBlock(blk_addr)
+               && !mshrQueue.findMatch(blk_addr) 
+               && !writeBuffer.findMatch(blk_addr)) {
+                
+                DPRINTF(TestTrans, "try prefetch reused sub block addr %x, head sub block addr %x\n",blk_addr,head_addr);
+       	        Request *subBlockReq = new Request(blk_addr, blkSize, 0, pkt->req->masterId());
+                PacketPtr subBlockPkt = new Packet(subBlockReq, MemCmd::HardPFReq);
+   	        subBlockPkt->allocate();
+                subBlockPkt->req->setThreadContext(pkt->req->contextId(), pkt->req->threadId());
+                subBlockPkt->setBaseAddr(head_addr);
+                subBlockPkt->setOriCmd(MemCmd::HardPFReq);
+                assert(subBlockPkt->needsResponse());
+                allocateMissBuffer(subBlockPkt, time, true);
+            }
+        }
+    }
+}
+
 
 
 // See comment in cache.hh.
@@ -1387,6 +1579,17 @@ Cache<TagStore>::recvTimingResp(PacketPtr pkt)
 
         blk = handleFill(pkt, blk, writebacks);
         assert(blk != NULL);
+        //Qi: set firstAccessTick of the blk here, do we need to add the
+        //condition that blk->firstAccessTick == 0?
+        if(isBottomLevel && blk->firstAccessTick == 0 && pkt->cmd != MemCmd::HardPFResp && pkt->cmd != MemCmd::HardPFReq) {
+            blk->firstAccessTick = curTick();
+        }
+
+        //Qi: if the pkt is not hard prefetch, means the blk is acutually
+        //accessed, please set the reused bit
+        if(isBottomLevel && pkt->cmd != MemCmd::HardPFResp && pkt->cmd != MemCmd::HardPFReq) {
+            blk->reUsed = true;
+        }
     }
 
     //Qi: only used for alt3
@@ -1792,22 +1995,26 @@ Cache<TagStore>::allocateBlock(Addr addr, PacketList &writebacks, int _op)
             //Qi: indicate whether there are multiple dirty sub blocks in the logical large block, if yes, do not push the current block to stt ram and also mark the other sub blocks so that they will not be pushed into stt ram
             //bool multi_reuse_blocks = tags->checkMultipleReuseBlk(repl_addr,eDRAM_blkAlign(repl_addr),eDRAMblkSize/blkSize);
 
-            bool multi_reuse_blocks = false;
+            //bool multi_reuse_blocks = false;
             if(isBottomLevel) {
             //Qi: collect some stats
                 if(blk->reUsed)    reusedBlkNum++;
                 else    unreusedBlkNum++;
             }
-            if(isBottomLevel && !blk->reUsed && !multi_reuse_blocks) {
-	        DPRINTF(SttCache,"transfer between stt and edram here, addr %x\n",repl_addr);
-                
-                handleTransferBetweenTags(repl_addr, writebacks, blk);
-		//BlkType* blk2 = allocateSttBlock(repl_addr, writebacks);
-                //assert(!blk2);
-                //stt_tags->insertBlockNoPkt(repl_addr, blk2);
-                //blk2->whenReady = clockEdge() + stt_readLatency * clockPeriod() + stt_writeLatency * clockPeriod();
-		// here we did not consider the bandwidth between the two tags
-	        // and we did not consider the bus overhead
+            if(isBottomLevel) {
+                DPRINTF(SttCache,"begin check transfer condition, addr %x\n",repl_addr);
+                //Qi: update trans bit of the current blk and all other sub-blocks
+                //tags->updateTransStat(repl_addr, eDRAM_blkAlign(repl_addr), int(eDRAMblkSize/blkSize));
+                updateTransStat(repl_addr, eDRAM_blkAlign(repl_addr), int(eDRAMblkSize/blkSize));
+
+                //Qi: transfer the blk based on transferrable bit
+                if(blk->transferrable && blk->reUsed) {
+	            DPRINTF(SttCache,"transfer between stt and edram here, addr %x\n",repl_addr);
+                    handleTransferBetweenTags(repl_addr, writebacks, blk);
+                }
+                else if(blk->isDirty()) {
+                    writebacks.push_back(writebackBlk(blk));
+                }
             }
             else if(isLLC && alt_mech == 1 && blk->isSram && blk->isValid() && tags->getBlkPos(blk) < K_value) {
                 DPRINTF(ALT1,"push addr %x to stt ram\n",addr);
@@ -1904,6 +2111,10 @@ Cache<TagStore>::handleTransferBetweenTags(Addr addr, PacketList &writebacks,Blk
     blk->status = _blk->status;
     assert(blk->isReadable());
     blk->srcMasterId = _blk->srcMasterId;
+    //Qi: copy bit_vector here
+    for(int i = 0; i < 8; i++) {
+        blk->bit_vector[i] = _blk->bit_vector[i];
+    }
     //Qi: transfer data here...
     std::memcpy(blk->data, _blk->data, blkSize);
 }
@@ -2068,17 +2279,23 @@ Cache<TagStore>::checkExpiredVisitor(BlkType &blk) {
         else    unreusedBlkNum++;
         blk.setExpiredTime(LLONG_MAX);
         //bool multi_reuse_blocks = tags->checkMultipleReuseBlk(repl_addr,eDRAM_blkAlign(repl_addr),eDRAMblkSize/blkSize);
-        bool multi_reuse_blocks = false;
         DPRINTF(ExpiredBlock,"blk at addr %x expired, handle it\n", repl_addr);
-        if(!blk.reUsed && !multi_reuse_blocks) {
-            DPRINTF(ExpiredBlock,"addr %x not reused, push to stt tag\n",repl_addr);
+        
+        DPRINTF(ExpiredBlock,"begin check transfer condition, expired, addr %x\n",repl_addr);
+        //tags->updateTransStat(repl_addr, eDRAM_blkAlign(repl_addr), int(eDRAMblkSize/blkSize));
+        updateTransStat(repl_addr, eDRAM_blkAlign(repl_addr), int(eDRAMblkSize/blkSize));
+
+        if(blk.transferrable && blk.reUsed) {
+            DPRINTF(ExpiredBlock,"addr %x transferrable, push to stt tag\n",repl_addr);
 	    handleTransferBetweenTags(repl_addr,writebacks,&blk);
+            
             while(!writebacks.empty()) {
                 PacketPtr wbPkt = writebacks.front();
                 allocateWriteBuffer(wbPkt,time,true);
                 writebacks.pop_front();
             }
         }
+        
 	else if(blk.isDirty()) {
             DPRINTF(SttCache,"addr %x has never been used but dirty ,write back\n",repl_addr);
 	    allocateWriteBuffer(writebackBlk(&blk),time,true);
@@ -2155,22 +2372,16 @@ Cache<TagStore>::handleFill(PacketPtr pkt, BlkType *blk,
            	tags->insertBlock(pkt, blk, dead_on_arrival, closing_writes);
 		if(isBottomLevel) {
                     setExpired(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod() + pkt->busLastWordDelay + expiredPeriod,blk,pkt->getAddr());
-		    /*blk->setExpiredTime(clockEdge() + responseLatency * clockPeriod() + writeLatency * clockPeriod() + pkt->busLastWordDelay + expiredPeriod);
-		    DPRINTF(ExpiredBlock,"Try schedule for handlefill addr %x expire at ticks %d\n",pkt->getAddr(),blk->expired_count);
-		    if(!handleExpiredEvent.scheduled())
-		        schedule(handleExpiredEvent, blk->expired_count);
-		    else {
-		        DPRINTF(ExpiredBlock,"wait for reschedule,push tick %ld\n",blk->expired_count);
-			PendingExpiredQueue.push_back(blk->expired_count);
-		    }*/
                 }
                 if(isLLC && alt_mech == 2) {
                     setRefresh();
                 }
-		if(dead_on_arrival != 0)
-			num_dead_on_arrival++;
-		if(closing_writes != 0)
-			num_closing_writes++;
+		if(dead_on_arrival != 0) {
+	            num_dead_on_arrival++;
+                }
+		if(closing_writes != 0) {
+		    num_closing_writes++;
+                }
             //tags->insertBlock(pkt, blk);
         }
 

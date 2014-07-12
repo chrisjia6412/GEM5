@@ -162,12 +162,19 @@ class CacheBlk
     int TIME;
 
     /** Qi: indicate the first access time of the blk, reset when eviction*/
-    Cycles firstAcessCycle;
+    Tick firstAccessTick;
+
+    /** Qi: indicate whether there has been other sub-block has been checked when eviction, if yes,
+     *      when this sub-block is evicted, do not check again, just transfer according 
+     *       to the transferrable bit, default is false
+     */
+    bool transferCheck;
 
     /** Qi: indicate which sub-blocks we prefetch when the current
-     *      sub-block is re-accessed
+     *      sub-block is re-accessed, 0 - do not prefetch, 1 - prefetch
+     *      2 - the sub block is the block stored in stt ram
      */
-    bool bit_vector[8];
+    int bit_vector[8];
 
     /** Number of references to this block since it was brought in. */
     int refCount;
@@ -225,11 +232,12 @@ class CacheBlk
         : asid(-1), tag(0), data(0) ,size(0), status(0), whenReady(0),
           set(-1), isTouched(false), reUsed(false), expired_count(LLONG_MAX), 
           transferrable(true), sourceTag(0), isSram(false), LRUs(0), SC(0),
-          OID(-1), lastWrite(false), disabled(false), pred_stat(0), TIME(0), firstAccessCycle(0),
-          refCount(0), srcMasterId(Request::invldMasterId),blkSource(-1)
+          OID(-1), lastWrite(false), disabled(false), pred_stat(0), TIME(0), 
+          firstAccessTick(0), transferCheck(false), refCount(0),
+          srcMasterId(Request::invldMasterId),blkSource(-1)
     {
         for(int i = 0; i < 8; i++) {
-            bit_vector[i] = false;
+            bit_vector[i] = 0;
         }
     }
 
@@ -305,6 +313,12 @@ class CacheBlk
         disabled = false;
         pred_stat = 0;
         TIME = 0;
+        //Qi: reset bit_vector, firstAccessCycle and transferCheck
+        firstAccessTick = 0;
+        transferCheck = false;
+        for(int i = 0; i < 8; i++) {
+            bit_vector[i] = 0;
+        }
         clearLoadLocks();
     }
 

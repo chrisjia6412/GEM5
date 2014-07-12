@@ -175,7 +175,7 @@ public:
     /**
      * The following 4 functions are just for passing compilation
      */
-    bool checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block) {return true;}
+    void updateTransStat(Addr repl_addr, Addr align_addr, int num_sub_block) {}
     BlkType* findSramVictim(Addr addr) {return NULL;}
     BlkType* findSttRamVictim(Addr addr) {return NULL;}
     int getBlkPos(BlkType* blk) {return 0;}

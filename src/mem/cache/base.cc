@@ -92,6 +92,7 @@ BaseCache::BaseCache(const Params *p)
       testTimeStampMode(p->testTimeStamp_Mode),
       largeBlockEnabled(p->large_block_enabled),
       alt_mech(p->alternative_mech),
+      perfThreshold(p->performance_threshold),
       expiredPeriod(p->expired_period),
       refreshPeriod(p->refresh_period),
       init_refresh(0),

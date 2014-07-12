@@ -181,13 +181,12 @@ public:
     BlkType* eDRAM_accessBlock(Addr align_addr, Addr addr, Cycles &lat, int context_src, int num_sub_block);
 
 
-    /** Return the determination whether this block should be pushed into 
-     *  STT RAM. If the sub block is marked as "cannot be transferred", return f     *  alse directly. If only the current sub block is reused in the large
-     *  block then the current sub block should be pushed, return true. 
-     *  If multiple sub blocks are reused, do not push and mark 
-     *  all sub blocks as 'cannot be transferred'
+    /** Update transferrable bit for the blk and all the sub-blocks whose
+     *  transfer_check bit is false. This function would not give
+     *  determination whether the blk should be transferred, it just update
+     *  the transferrable bit. But determination is only judged by the bit
      */ 
-     bool checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block);
+     void updateTransStat(Addr repl_addr, Addr align_addr, int num_sub_block);
 
 
     /**

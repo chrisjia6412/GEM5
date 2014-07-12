@@ -482,6 +482,8 @@ class Cache : public BaseCache
     void setExpired(Tick expired_, BlkType *blk_, Addr addr_);
     void setRefresh();
     void prefetchLargeBlk(Addr ori_addr, PacketPtr pkt, Tick time);
+    void prefetchReusedBlk(BlkType *blk, PacketPtr pkt, Tick time);
+    void updateTransStat(Addr repl_addr, Addr align_addr, int num_sub_block);
 };
 
 #endif // __CACHE_HH__

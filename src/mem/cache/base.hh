@@ -331,6 +331,11 @@ class BaseCache : public MemObject
      */
     int alt_mech;
 
+    /** the maximum accepted performace loss (cache hit loss), only used for
+     *  locality approach
+     */
+    int perfThreshold;
+
     /** The expire time of edram*/
     const int expiredPeriod;
 

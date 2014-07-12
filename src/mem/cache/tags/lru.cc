@@ -55,6 +55,7 @@
 #include "debug/TestTags.hh"
 #include "debug/ALT1.hh"
 #include "debug/ALT2.hh"
+#include "debug/TestTrans.hh"
 #include "mem/cache/tags/lru.hh"
 #include "mem/cache/base.hh"
 #include "sim/core.hh"
@@ -244,6 +245,9 @@ LRU::eDRAM_accessBlock(Addr align_addr, Addr addr, Cycles &lat, int master_id,in
     unsigned set = extractSet(addr);
     int i = num_sub_block;
     BlkType *required_blk = sets[set].findBlk(tag);
+    if(required_blk != NULL) {
+        required_blk->reUsed = true;
+    }
     while(i != 0) {
       Addr temp_addr = align_addr + (i-1)*blkSize;
       unsigned temp_set = extractSet(temp_addr);
@@ -253,7 +257,7 @@ LRU::eDRAM_accessBlock(Addr align_addr, Addr addr, Cycles &lat, int master_id,in
       if (required_blk !=NULL && blk != NULL) {
           // move this block to head of the MRU list
           sets[temp_set].moveToHead(blk);
-          blk->reUsed = true;
+          //blk->reUsed = true;
           DPRINTF(SttCache,"Previous expired %d, new expired %d, clockEdge %d, expiredPeriod %d\n",blk->expired_count,clockEdge()+expiredPeriod,clockEdge(),expiredPeriod);
           if(required_blk != NULL && (clockEdge()+expiredPeriod) > blk->expired_count) {
               blk->setExpiredTime(clockEdge()+expiredPeriod);
@@ -634,34 +638,98 @@ LRU::cleanupRefs()
     }
 }
 
-bool LRU::checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_block) {
+void LRU::updateTransStat(Addr repl_addr, Addr align_addr, int num_sub_block) {
+    DPRINTF(TestTrans,"addr %x, align addr %x, update transfer stat\n",repl_addr,align_addr);
     int i = num_sub_block;
-    int num_reused_blk = 0;
-    BlkType *required_blk = sets[extractSet(repl_addr)].findBlk(extractTag(align_addr));
+    BlkType *required_blk = sets[extractSet(repl_addr)].findBlk(extractTag(repl_addr));
     assert(required_blk->isValid());
-    //Qi: this block must belong to a large block which has been detected 
-    //multiple reuse sub block
-    if(!required_blk->transferrable) {
-        return true;
+    //Qi: if the sub-block has been checked, return
+    if(required_blk->transferCheck) {
+        DPRINTF(TestTrans,"addr %x has been checked, nothing to do here\n", repl_addr);
+        return;
     }
+    //Qi: find the earliest accessed sub-block
+    Tick minimum_tick = 0;
+    int target_blk_num = -1;
     while(i != 0) {
-      Addr temp_addr = align_addr + (i-1)*blkSize;
-      unsigned temp_set = extractSet(temp_addr);
-      Addr temp_tag = extractTag(temp_addr);
-      BlkType *blk = sets[temp_set].findBlk(temp_tag);
-      if(blk != NULL && blk->reUsed) {
-          num_reused_blk++;
-      }
-      i--;
+        Addr temp_addr = align_addr + (i-1)*blkSize;
+        unsigned temp_set = extractSet(temp_addr);
+        Addr temp_tag = extractTag(temp_addr);
+        BlkType *blk = sets[temp_set].findBlk(temp_tag);
+        if(blk != NULL && blk->reUsed && !blk->transferCheck) {
+            if(minimum_tick == 0) {
+                minimum_tick = blk->firstAccessTick;
+                target_blk_num = i;
+            }
+            else if(blk->firstAccessTick < minimum_tick) {
+                minimum_tick = blk->firstAccessTick;
+                target_blk_num = i;
+            }
+        }
+        i--;
     }
-    
-    if(num_reused_blk <= 1) {
-    //Qi: only one sub block or no block is reused in large block, return false
-        return false;
+    if(target_blk_num == -1) {
+        DPRINTF(TestTrans, "no sub block reused, no one should be stored\n");
+        return;
+    }
+    DPRINTF(TestTrans,"earliest accessed addr %x, #%d sub block, accessed tick %ld\n",align_addr+(target_blk_num-1)*blkSize,target_blk_num,minimum_tick);
+    //Qi: find if the earliest one is much earlier than the others
+    //threshold is set 150 cycles (75000000 ticks)
+
+    bool earliest_blk = true;//indicate if we only need to store one sub-block
+    i = num_sub_block;
+    while(i != 0) {
+        Addr temp_addr = align_addr + (i-1)*blkSize;
+        unsigned temp_set = extractSet(temp_addr);
+        Addr temp_tag = extractTag(temp_addr);
+        BlkType *blk = sets[temp_set].findBlk(temp_tag);
+        if(blk != NULL && blk->reUsed && !blk->transferCheck && i != target_blk_num) {
+            if(blk->firstAccessTick - minimum_tick < 75000000) {
+                earliest_blk = false;
+                break;
+            }
+        }
+        i--;
     }
 
+    //Qi: if we only need to store one, iterate to set transferCheck and
+    //transferrable of all sub blocks and bit_vector of the head sub block
+    //set to make all sub blocks except the head as non transferrable and
+    //check transfer as true
+    if(earliest_blk) {
+        DPRINTF(TestTrans,"head sub block exist, only store the head\n");
+        i = num_sub_block;
+        //get the target blk firstly
+        Addr target_addr = align_addr + (target_blk_num-1)*blkSize;
+        unsigned target_set = extractSet(target_addr);
+        Addr target_tag = extractTag(target_addr);
+        BlkType *target_blk = sets[target_set].findBlk(target_tag);
+        target_blk->transferrable = true;
+        target_blk->transferCheck = true;
+        target_blk->bit_vector[target_blk_num] = 2;
+        while(i != 0) {
+            Addr temp_addr = align_addr + (i-1)*blkSize;
+            unsigned temp_set = extractSet(temp_addr);
+            Addr temp_tag = extractTag(temp_addr);
+            BlkType *blk = sets[temp_set].findBlk(temp_tag);
+            if(blk != NULL) {
+                DPRINTF(TestTrans,"check #%d sub block, addr %x,transfer check bit %d, reUsed bit %d, transferrable bit %d\n",i,temp_addr,blk->transferCheck,blk->reUsed,blk->transferrable);
+            }
+            if(blk != NULL && i != target_blk_num && !blk->transferCheck) {
+                target_blk->transferrable = false;
+                target_blk->transferCheck = true;
+                if(blk->reUsed) {
+                    DPRINTF(TestTrans,"#%d sub block addr %x reused, set corresponding bit vector\n",i,temp_addr);
+                    target_blk->bit_vector[i] = 1;
+                }
+            }
+            i--;
+        }
+    }
+    //Qi: else disable bit_vector of all sub blocks, set transferCheck
+    // and transferrable bit of all sub blocks
     else {
-    //Qi: multiple reused block exist, please mark all sub blocks as untransferrable
+        DPRINTF(TestTrans,"head sub block does not exist\n");
         i = num_sub_block;
         while(i != 0) {
             Addr temp_addr = align_addr + (i-1)*blkSize;
@@ -669,12 +737,19 @@ bool LRU::checkMultipleReuseBlk(Addr repl_addr, Addr align_addr, int num_sub_blo
             Addr temp_tag = extractTag(temp_addr);
             BlkType *blk = sets[temp_set].findBlk(temp_tag);
             if(blk != NULL) {
-                blk->transferrable = false;
+                DPRINTF(TestTrans,"check #%d sub block, addr %x, transfer check bit %d, reUsed bit %d, transferrable bit %d\n",i,temp_addr,blk->transferCheck,blk->reUsed,blk->transferrable);
+            }
+            if(blk != NULL && !blk->transferCheck) {
+                blk->transferCheck = true;
+                if(blk->reUsed) {
+                    blk->transferrable = true;
+                }
+                else {
+                    blk->transferrable = false;
+                }
             }
             i--;
         }
- 
-        return true;
     }
  
 }
